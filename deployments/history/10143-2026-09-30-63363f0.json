@@ -1,0 +1,19 @@
+{
+  "chainId": 10143,
+  "deployedAt": "2026-09-30T06:54:40.822Z",
+  "commit": "63363f0",
+  "startBlock": 66905096,
+  "contracts": {
+    "MockUSDC": "0x35ca89ea58b292bf8d66efec2c086501a3802980",
+    "MockIdentityRegistry": "0xed34ffc39ee69c780586b85d930368bc29b30ef1",
+    "MockReputationRegistry": "0xcdb4be378d4b276184923e7ad8c11007fd0247bd",
+    "StakeVault": "0x9e4da70c473cca89cba871a89b4c604b278bf0c7",
+    "TaskEscrow": "0x4feed0338761817417fd1dddfc8331d16aeb370d",
+    "AgentAccountFactory": "0xcca4464071b71bee85d8390073492048721849ca",
+    "PaymentToken": "0x35ca89ea58b292bf8d66efec2c086501a3802980"
+  },
+  "erc8004": {
+    "identityRegistry": "0xed34ffc39ee69c780586b85d930368bc29b30ef1",
+    "reputationRegistry": "0xcdb4be378d4b276184923e7ad8c11007fd0247bd"
+  }
+}

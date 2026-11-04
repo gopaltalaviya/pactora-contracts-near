@@ -1,0 +1,7 @@
+{
+  "name": "pactora-contracts-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node tooling for the Pactora contracts repo (ABI export, deployment files, config checks)."
+}

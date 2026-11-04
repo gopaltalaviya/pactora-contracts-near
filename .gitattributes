@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.sol  text eol=lf
+*.json text eol=lf
+*.mjs  text eol=lf
+*.yml  text eol=lf
+Makefile text eol=lf

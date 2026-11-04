@@ -1,0 +1,101 @@
+name: contracts
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  test:
+    name: build · test · coverage · gas
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { submodules: recursive }
+
+      # Pinned: `stable` moves, and a formatter or compiler change would turn
+      # CI red on code nobody touched.
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: v1.5.1 }
+
+      - name: Show versions
+        run: forge --version
+
+      - name: Format check
+        run: forge fmt --check
+
+      - name: Build
+        run: forge build --sizes
+
+      - name: Test (10k fuzz runs, 512×64 invariants)
+        run: forge test -vvv
+
+      - name: Coverage floors (branch)
+        run: |
+          forge coverage --ir-minimum --report lcov
+          node scripts/check-coverage.mjs lcov.info
+
+      # Deterministic tests only: fuzz and invariant gas varies with the seed,
+      # which would make this check fail on code nobody changed.
+      - name: Gas snapshot must not drift
+        run: |
+          make snapshot-check \
+            || (echo "::error::Gas changed. Run 'make snapshot' and commit .gas-snapshot." && exit 1)
+
+  static:
+    name: solhint · slither
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { submodules: recursive }
+      - uses: actions/setup-node@v7
+        with: { node-version: '22' }
+      - uses: foundry-rs/foundry-toolchain@v1
+        with: { version: v1.5.1 }
+
+      - name: solhint
+        run: npx --yes solhint@5.0.5 "src/**/*.sol"
+
+      # Fails on medium and above. What remains below that is triaged inline
+      # (slither-disable-next-line, each with its reason) or by design:
+      # timestamps for deadlines, the two audited assembly helpers.
+      - name: slither
+        uses: crytic/slither-action@v0.4.1
+        with:
+          fail-on: medium
+          slither-config: slither.config.json
+
+  config:
+    name: config integrity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with: { node-version: '22' }
+
+      # .env.example is tracked and sits next to .env with identical variable
+      # names, which makes pasting a real value into the wrong one easy and
+      # quiet. This makes it loud.
+      - name: No secrets in tracked files
+        run: node scripts/check-no-secrets.mjs
+
+      # Every network must declare the SAME parameter keys, with sane values.
+      - name: Parameter key parity and bounds
+        run: node scripts/check-config.mjs
+
+      # The ERC-8004 registries are upgradeable proxies owned by someone else.
+      # If the implementation moves, we want to know from CI, not from a
+      # failing demo. Non-blocking: it depends on a public RPC being up.
+      - name: ERC-8004 registry probe (non-blocking)
+        continue-on-error: true
+        run: node scripts/verify-erc8004.mjs

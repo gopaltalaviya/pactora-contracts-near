@@ -1,0 +1,21 @@
+{
+  "name": "@pactora/contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./abis/*": "./abis/*"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "abis",
+    "networks.json",
+    "deployments"
+  ]
+}

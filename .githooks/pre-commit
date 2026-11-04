@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# Block the COMMIT, not the build after it. A secret that reaches a remote
+# cannot be unpublished; rewriting history does not recall what was fetched.
+node scripts/check-no-secrets.mjs || {
+  echo ""
+  echo "  Commit blocked. Move secrets to .env (gitignored)."
+  exit 1
+}

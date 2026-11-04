@@ -1,0 +1,14 @@
+out/
+cache/
+node_modules/
+
+# Local run artifacts. deployments/<chainId>.json is the committed output.
+broadcast/
+
+.env
+.env.*
+!.env.example
+*.log
+
+# coverage output
+lcov.info
