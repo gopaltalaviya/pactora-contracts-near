@@ -70,7 +70,7 @@ jobs:
       # (slither-disable-next-line, each with its reason) or by design:
       # timestamps for deadlines, the two audited assembly helpers.
       - name: slither
-        uses: crytic/slither-action@v0.4.1
+        uses: crytic/slither-action@v0.4.2
         with:
           fail-on: medium
           slither-config: slither.config.json
