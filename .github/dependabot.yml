@@ -3,7 +3,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
-  # forge-std and OpenZeppelin are pinned submodules; a bump is a reviewed PR.
-  - package-ecosystem: gitsubmodule
+  # near-sdk and friends are pinned in Cargo.toml; a bump is a reviewed PR.
+  - package-ecosystem: cargo
     directory: /
     schedule: { interval: weekly }

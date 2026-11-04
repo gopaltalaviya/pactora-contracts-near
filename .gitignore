@@ -1,9 +1,8 @@
-out/
-cache/
+# Rust build output
+/target/
 node_modules/
 
-# Local run artifacts. deployments/<chainId>.json is the committed output.
-broadcast/
+# Local run artifacts. deployments/<network>.json is the committed output.
 
 .env
 .env.*
@@ -12,3 +11,5 @@ broadcast/
 
 # coverage output
 lcov.info
+# near-workspaces sandbox state
+.near/

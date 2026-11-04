@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,89 +14,73 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FOUNDRY_PROFILE: ci
+  CARGO_TERM_COLOR: always
+  # Pinned, so a release of cargo-near cannot turn CI red on code nobody touched.
+  CARGO_NEAR_VERSION: "0.22.0"
 
 jobs:
-  test:
-    name: build · test · coverage · gas
+  check:
+    name: fmt · clippy · unit tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-        with: { submodules: recursive }
+      # The toolchain comes from rust-toolchain.toml (rustup reads it).
+      - name: Toolchain
+        run: rustup show active-toolchain && rustc --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (all targets, warnings are errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Unit and property tests
+        run: cargo test --workspace --lib
 
-      # Pinned: `stable` moves, and a formatter or compiler change would turn
-      # CI red on code nobody touched.
-      - uses: foundry-rs/foundry-toolchain@v1
-        with: { version: v1.5.1 }
-
-      - name: Show versions
-        run: forge --version
-
-      - name: Format check
-        run: forge fmt --check
-
-      - name: Build
-        run: forge build --sizes
-
-      - name: Test (10k fuzz runs, 512×64 invariants)
-        run: forge test -vvv
-
-      - name: Coverage floors (branch)
-        run: |
-          forge coverage --ir-minimum --report lcov
-          node scripts/check-coverage.mjs lcov.info
-
-      # Deterministic tests only: fuzz and invariant gas varies with the seed,
-      # which would make this check fail on code nobody changed.
-      - name: Gas snapshot must not drift
-        run: |
-          make snapshot-check \
-            || (echo "::error::Gas changed. Run 'make snapshot' and commit .gas-snapshot." && exit 1)
-
-  static:
-    name: solhint · slither
+  wasm:
+    name: build wasm
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-        with: { submodules: recursive }
-      - uses: actions/setup-node@v7
-        with: { node-version: '22' }
-      - uses: foundry-rs/foundry-toolchain@v1
-        with: { version: v1.5.1 }
-
-      - name: solhint
-        run: npx --yes solhint@5.0.5 "src/**/*.sol"
-
-      # Fails on medium and above. What remains below that is triaged inline
-      # (slither-disable-next-line, each with its reason) or by design:
-      # timestamps for deadlines, the two audited assembly helpers.
-      - name: slither
-        uses: crytic/slither-action@v0.4.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/near/cargo-near/releases/download/cargo-near-v${CARGO_NEAR_VERSION}/cargo-near-installer.sh" | sh
+          cargo near --version
+      - name: Build both contracts
+        run: |
+          for c in pactora mock-usdc; do
+            (cd "contracts/$c" && cargo near build non-reproducible-wasm --locked)
+          done
+      - name: Sizes and hashes
+        run: |
+          ls -l target/near/*/*.wasm
+          sha256sum target/near/*/*.wasm | tee wasm.sha256
+      - uses: actions/upload-artifact@v7
         with:
-          fail-on: medium
-          slither-config: slither.config.json
+          name: wasm
+          path: |
+            target/near/pactora/pactora.wasm
+            target/near/pactora/pactora_abi.json
+            target/near/mock_usdc/mock_usdc.wasm
+            wasm.sha256
+          if-no-files-found: error
 
-  config:
-    name: config integrity
+  sandbox:
+    name: sandbox integration tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: '22' }
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/near/cargo-near/releases/download/cargo-near-v${CARGO_NEAR_VERSION}/cargo-near-installer.sh" | sh
+      - name: Sandbox tests (local NEAR node, compiled wasm)
+        run: cargo test -p pactora --test sandbox -- --test-threads=2
 
-      # .env.example is tracked and sits next to .env with identical variable
-      # names, which makes pasting a real value into the wrong one easy and
-      # quiet. This makes it loud.
-      - name: No secrets in tracked files
-        run: node scripts/check-no-secrets.mjs
-
-      # Every network must declare the SAME parameter keys, with sane values.
-      - name: Parameter key parity and bounds
-        run: node scripts/check-config.mjs
-
-      # The ERC-8004 registries are upgradeable proxies owned by someone else.
-      # If the implementation moves, we want to know from CI, not from a
-      # failing demo. Non-blocking: it depends on a public RPC being up.
-      - name: ERC-8004 registry probe (non-blocking)
-        continue-on-error: true
-        run: node scripts/verify-erc8004.mjs
+  secrets:
+    name: no secrets in tracked files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: node scripts/check-no-secrets.mjs

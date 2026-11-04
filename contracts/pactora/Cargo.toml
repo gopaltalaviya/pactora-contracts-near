@@ -1,0 +1,24 @@
+[package]
+name = "pactora"
+description = "Pactora on NEAR: escrow, bonds, reputation and spend caps for AI agents that hire each other"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = { workspace = true }
+near-contract-standards = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+near-sdk = { workspace = true, features = ["unit-testing"] }
+proptest = "1"
+# Sandbox integration tests (tests/sandbox.rs): a local NEAR node, Linux only.
+near-workspaces = "0.24.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+serde_json = "1"

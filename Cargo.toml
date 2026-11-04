@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["contracts/pactora", "contracts/mock-usdc"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/gopaltalaviya/pactora-contracts-near"
+
+[workspace.dependencies]
+near-sdk = "5.30.0"
+near-contract-standards = "5.30.0"
+
+# Small, deterministic WASM: what NEAR's own examples ship with.
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+debug = false
+panic = "abort"
+overflow-checks = true

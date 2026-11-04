@@ -1,3 +1,0 @@
-# Mocks copy the upstream ERC-8004 registries, including their require-string
-# revert reasons, so tests meet the same errors the real registries raise.
-src/mocks/
