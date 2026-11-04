@@ -34,7 +34,7 @@ pub fn wallet_accepted(id: AgentId, wallet: &AccountId, previous: Option<&Accoun
     );
 }
 
-pub fn wallet_proposed(id: AgentId, wallet: &AccountId) {
+pub fn wallet_proposed(id: AgentId, wallet: Option<&AccountId>) {
     emit(
         "wallet_proposed",
         json!({ "agent_id": id, "pending_wallet": wallet }),

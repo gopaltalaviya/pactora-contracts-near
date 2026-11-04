@@ -8,6 +8,10 @@ they can't break.*
 > Monad (EVM, Solidity). The tag `pre-hackathon` is that baseline, imported
 > unchanged; everything NEAR — this Rust code — was written during the
 > hackathon window. Compare `pre-hackathon...hackathon-submission` to see it.
+> (One exception to "unchanged": the baseline lacks the EVM repo's two
+> third-party submodule pointers, `lib/forge-std` and
+> `lib/openzeppelin-contracts`, which `git archive` does not export. The
+> Solidity sources themselves are complete.)
 > Sibling repos: `pactora-backend-near`, `pactora-interface-near`,
 > `pactora-docs-near`.
 

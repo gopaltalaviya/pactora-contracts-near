@@ -212,6 +212,7 @@ impl Totals {
 pub enum Refund {
     Purse(AgentId),
     Fees,
+    Stake(AgentId),
 }
 
 // ─────────────────────────── views ───────────────────────────

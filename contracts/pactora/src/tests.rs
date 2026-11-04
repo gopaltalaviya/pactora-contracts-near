@@ -261,7 +261,7 @@ fn one_wallet_serves_one_agent() {
 fn wallet_rotation_keeps_the_old_key_until_the_new_one_accepts() {
     let (mut h, client, worker) = market();
     h.as_yocto("alice.test");
-    h.c.propose_wallet(client, acc("c2.alice.test"));
+    h.c.propose_wallet(client, Some(acc("c2.alice.test")));
     let job = create(&mut h, client, worker, 100_000);
     h.as_("c2.alice.test");
     h.c.accept_wallet(client);
@@ -718,12 +718,309 @@ fn unstaking_waits_out_the_delay_and_never_touches_locked_stake() {
     expect_panic("WithdrawAlreadyPending", || {
         h.c.request_unstake(worker, U128(1))
     });
-    expect_panic("StillLocked", || h.c.complete_unstake(worker));
+    expect_panic("StillLocked", || {
+        let _ = h.c.complete_unstake(worker);
+    });
     h.advance(604_800);
     h.as_yocto("bob.test");
-    h.c.complete_unstake(worker);
-    assert_eq!(h.balance(worker), 19_800_000);
+    let _ = h.c.complete_unstake(worker);
+    // Paid to the owner, never through the agent's spendable balance.
+    assert_eq!(h.balance(worker), 0);
+    assert_eq!(h.c.get_totals().in_flight.0, 19_800_000);
     h.check_i1();
+    h.finish_send(true, "bob.test", 19_800_000, Refund::Stake(worker));
+    h.check_i1();
+}
+
+#[test]
+fn a_failed_unstake_payout_goes_back_into_stake() {
+    let (mut h, _, worker) = market();
+    h.as_yocto("bob.test");
+    h.c.request_unstake(worker, U128(5_000_000));
+    h.advance(604_800);
+    h.as_yocto("bob.test");
+    let _ = h.c.complete_unstake(worker);
+    h.finish_send(false, "bob.test", 5_000_000, Refund::Stake(worker));
+    let s = h.c.stake_of(worker).unwrap();
+    assert_eq!((s.available.0, s.pending.0), (20_000_000, 0));
+    h.check_i1();
+}
+
+#[test]
+fn cancel_unstake_restores_the_stake() {
+    let (mut h, _, worker) = market();
+    h.as_yocto("bob.test");
+    expect_panic("NothingPending", || h.c.cancel_unstake(worker));
+    h.c.request_unstake(worker, U128(15_000_000));
+    assert!(!h.c.is_hireable(worker));
+    h.c.cancel_unstake(worker);
+    let s = h.c.stake_of(worker).unwrap();
+    assert_eq!(
+        (s.available.0, s.pending.0, s.unlock_at),
+        (20_000_000, 0, 0)
+    );
+    assert!(h.c.is_hireable(worker));
+    h.check_i1();
+}
+
+// ─────────────────────────── kill switch ───────────────────────────
+
+#[test]
+fn a_frozen_agent_wallet_can_do_nothing_but_exits_still_work() {
+    let (mut h, client, worker) = market();
+    let open = create(&mut h, client, worker, 100_000);
+    let submitted = create(&mut h, client, worker, 100_000);
+    h.as_("w.bob.test");
+    h.c.accept_job(submitted);
+    h.c.submit_result(submitted, RESULT.into());
+
+    h.as_("alice.test");
+    h.c.freeze_agent(client);
+    h.as_("c.alice.test");
+    expect_panic("AgentFrozen", || {
+        h.c.create_job(client, worker, U128(100_000), SPEC.into(), 300, 1_800);
+    });
+    expect_panic("AgentFrozen", || {
+        h.c.direct_pay(client, worker, U128(20_000), SPEC.into());
+    });
+    expect_panic("AgentFrozen", || h.c.cancel(open));
+    expect_panic("AgentFrozen", || h.c.approve(submitted, None));
+    expect_panic("AgentFrozen", || h.c.dispute(submitted, None));
+
+    h.as_("bob.test");
+    h.c.freeze_agent(worker);
+    h.as_("w.bob.test");
+    expect_panic("AgentFrozen", || h.c.accept_job(open));
+
+    // Exits anyone may call still end both jobs.
+    h.advance(601);
+    h.as_("anyone.test");
+    h.c.expire_unaccepted(open);
+    h.c.auto_approve(submitted);
+    h.check_i1();
+
+    // Unfrozen, both act again.
+    h.as_yocto("alice.test");
+    h.c.unfreeze_agent(client);
+    h.as_yocto("bob.test");
+    h.c.unfreeze_agent(worker);
+    h.as_("c.alice.test");
+    h.c.direct_pay(client, worker, U128(20_000), SPEC.into());
+    h.check_i1();
+}
+
+// ─────────────────────────── storage ───────────────────────────
+
+fn storage_bytes() -> u64 {
+    near_sdk::env::storage_usage()
+}
+
+/// Bytes one call adds, measured inside that call. (The mocked runtime
+/// resets its storage counter whenever the caller changes, so storage can
+/// only be compared within one call, which is also how the contract bills.)
+fn bytes_added_by(h: &mut H, who: &str, f: impl FnOnce(&mut Contract)) -> u64 {
+    h.as_(who);
+    h.c.flush();
+    let before = storage_bytes();
+    f(&mut h.c);
+    h.c.flush();
+    storage_bytes().saturating_sub(before)
+}
+
+/// What a job grows by after `create_job` billed it must fit in the reserve
+/// billed up front, on the path that grows it most (result, reason, ruling)
+/// and on the approve path (result, review).
+#[test]
+fn later_job_growth_fits_the_reserve_billed_at_creation() {
+    let (mut h, client, worker) = market();
+    let id = create(&mut h, client, worker, 1_000_000);
+    let mut growth = bytes_added_by(&mut h, "w.bob.test", |c| c.accept_job(id));
+    growth += bytes_added_by(&mut h, "w.bob.test", |c| c.submit_result(id, RESULT.into()));
+    growth += bytes_added_by(&mut h, "c.alice.test", |c| c.dispute(id, Some(SPEC.into())));
+    growth += bytes_added_by(&mut h, "dao.test", |c| c.resolve_dispute(id, false));
+    assert!(
+        growth > 0 && growth <= crate::JOB_GROWTH_BYTES,
+        "dispute path grew {growth} bytes"
+    );
+
+    let id = create(&mut h, client, worker, 1_000_000);
+    let mut growth = bytes_added_by(&mut h, "w.bob.test", |c| c.accept_job(id));
+    growth += bytes_added_by(&mut h, "w.bob.test", |c| c.submit_result(id, RESULT.into()));
+    growth += bytes_added_by(&mut h, "c.alice.test", |c| c.approve(id, Some(SPEC.into())));
+    assert!(
+        growth > 0 && growth <= crate::JOB_GROWTH_BYTES,
+        "approve path grew {growth} bytes"
+    );
+}
+
+/// Creation itself is billed to the client, measured in the same call.
+#[test]
+fn creating_a_job_is_billed_to_the_client() {
+    let (mut h, client, worker) = market();
+    let b0 = h.c.storage_balance_of(client).0;
+    let added = bytes_added_by(&mut h, "c.alice.test", |c| {
+        c.create_job(client, worker, U128(100_000), SPEC.into(), 300, 1_800);
+    });
+    let billed = b0 - h.c.storage_balance_of(client).0;
+    let cost = near_sdk::env::storage_byte_cost().as_yoctonear();
+    assert_eq!(billed, (added + crate::JOB_GROWTH_BYTES) as u128 * cost);
+}
+
+#[test]
+fn growing_an_agent_record_is_billed_to_the_agent() {
+    let (mut h, client, _) = market();
+    let b0 = h.c.storage_balance_of(client).0;
+    h.as_yocto("alice.test");
+    h.c.set_card_uri(client, "x".repeat(512));
+    let b1 = h.c.storage_balance_of(client).0;
+    assert!(b1 < b0, "a longer card is billed");
+    h.c.propose_wallet(client, Some(acc("c2.alice.test")));
+    let b2 = h.c.storage_balance_of(client).0;
+    assert!(b2 < b1, "a pending wallet is billed");
+    h.as_("c2.alice.test");
+    h.c.accept_wallet(client);
+    assert!(
+        h.c.storage_balance_of(client).0 <= b2,
+        "the wallet index is billed"
+    );
+}
+
+#[test]
+fn growth_is_refused_when_the_agent_has_no_storage_left() {
+    let mut h = H::new();
+    ctx("alice.test", NEAR, h.now);
+    let id =
+        h.c.register_agent(acc("c.alice.test"), "".into(), None, None);
+    let left = h.c.storage_balance_of(id).0;
+    h.as_yocto("alice.test");
+    let _ = h.c.storage_withdraw(id, U128(left));
+    assert_eq!(h.c.storage_balance_of(id).0, 0);
+    expect_panic("InsufficientStorage", || {
+        h.c.set_card_uri(id, "x".repeat(512))
+    });
+}
+
+#[test]
+fn storage_can_be_topped_up_and_withdrawn() {
+    let (mut h, client, _) = market();
+    let b0 = h.c.storage_balance_of(client).0;
+    ctx("anyone.test", NEAR, h.now);
+    assert_eq!(h.c.storage_deposit(client).0, b0 + NEAR);
+    h.as_yocto("c.alice.test");
+    expect_panic("NotAgentOwner", || {
+        let _ = h.c.storage_withdraw(client, U128(1));
+    });
+    h.as_yocto("alice.test");
+    expect_panic("InsufficientStorage", || {
+        let _ = h.c.storage_withdraw(client, U128(b0 + NEAR + 1));
+    });
+    let _ = h.c.storage_withdraw(client, U128(NEAR));
+    assert_eq!(h.c.storage_balance_of(client).0, b0);
+}
+
+#[test]
+fn a_failed_storage_withdrawal_restores_the_balance() {
+    let (mut h, client, _) = market();
+    let b0 = h.c.storage_balance_of(client).0;
+    h.as_yocto("alice.test");
+    let _ = h.c.storage_withdraw(client, U128(1_000));
+    let mut b = VMContextBuilder::new();
+    b.current_account_id(acc(CONTRACT))
+        .predecessor_account_id(acc(CONTRACT));
+    testing_env!(
+        b.build(),
+        near_sdk::test_vm_config(),
+        near_sdk::RuntimeFeesConfig::test(),
+        Default::default(),
+        vec![PromiseResult::Failed]
+    );
+    assert!(!h.c.on_storage_sent(client, U128(1_000)));
+    assert_eq!(h.c.storage_balance_of(client).0, b0);
+}
+
+// ─────────────────────────── wallets, gas, verdicts, order ───────────────────────────
+
+#[test]
+fn a_wallet_proposal_can_be_withdrawn() {
+    let (mut h, client, _) = market();
+    h.as_yocto("alice.test");
+    h.c.propose_wallet(client, Some(acc("typo.test")));
+    h.c.propose_wallet(client, None);
+    h.as_("typo.test");
+    expect_panic("NotPendingWallet", || h.c.accept_wallet(client));
+    assert_eq!(
+        h.c.get_agent(client).unwrap().wallet,
+        Some(acc("c.alice.test"))
+    );
+}
+
+#[test]
+fn sending_needs_gas_left_and_changes_nothing_without_it() {
+    let (mut h, client, _) = market();
+    let mut b = VMContextBuilder::new();
+    b.current_account_id(acc(CONTRACT))
+        .predecessor_account_id(acc("alice.test"))
+        .attached_deposit(NearToken::from_yoctonear(1))
+        .block_timestamp(h.now * 1_000_000_000)
+        .prepaid_gas(Gas::from_tgas(20));
+    testing_env!(b.build());
+    expect_panic("NotEnoughGas", || {
+        let _ = h.c.withdraw(client, U128(1_000), None);
+    });
+    assert_eq!(h.balance(client), 10_000_000);
+}
+
+#[test]
+fn verdicts_are_given_only_for_attributable_endings() {
+    let (mut h, client, worker) = market();
+    // Direct pay: no result was delivered.
+    h.as_("c.alice.test");
+    let direct = h.c.direct_pay(client, worker, U128(20_000), SPEC.into());
+    assert_eq!(h.c.verdict_of(direct), None);
+    // A dispute that expires: settled, but not attributable.
+    let id = disputed(&mut h, client, worker);
+    h.advance(3_601);
+    h.as_("anyone.test");
+    h.c.expire_dispute(id);
+    assert_eq!(h.c.verdict_of(id), None);
+    // An open job and an unknown job.
+    let open = create(&mut h, client, worker, 100_000);
+    assert_eq!(h.c.verdict_of(open), None);
+    assert_eq!(h.c.verdict_of(9_999), None);
+}
+
+#[test]
+fn same_owner_is_refused_before_hireability() {
+    let mut h = H::new();
+    let a = h.agent("alice.test", "a1.alice.test");
+    let b = h.agent("alice.test", "a2.alice.test"); // not staked
+    h.fund(a, 1_000_000);
+    h.as_("a1.alice.test");
+    expect_panic("SameOwner", || {
+        h.c.create_job(a, b, U128(100_000), SPEC.into(), 300, 1_800);
+    });
+}
+
+#[test]
+fn zero_bonds_emit_no_bond_events() {
+    let mut h = H::new();
+    h.as_yocto("owner.test");
+    let mut p = params();
+    p.dispute_bond_bps = 0;
+    p.min_dispute_bond = U128(0);
+    h.c.set_params(p);
+    let client = h.agent("alice.test", "c.alice.test");
+    let worker = h.agent("bob.test", "w.bob.test");
+    h.fund(client, 10_000_000);
+    h.stake(worker, 20_000_000);
+    let id = disputed(&mut h, client, worker);
+    h.as_("dao.test");
+    h.c.resolve_dispute(id, true);
+    let logs = near_sdk::test_utils::get_logs();
+    assert!(
+        !logs.iter().any(|l| l.contains("dispute_bond_settled")),
+        "{logs:?}"
+    );
 }
 
 // ─────────────────────────── params ───────────────────────────
@@ -782,7 +1079,9 @@ mod invariants {
         Expire,
         Advance(u64),
         Withdraw(u128, bool),
-        Unstake(u128),
+        ClaimFees(bool),
+        Unstake(u128, bool),
+        Freeze(bool),
     }
 
     fn op() -> impl Strategy<Value = Op> {
@@ -798,19 +1097,83 @@ mod invariants {
             Just(Op::Expire),
             (1u64..8_000).prop_map(Op::Advance),
             ((1u128..2_000_000), any::<bool>()).prop_map(|(a, ok)| Op::Withdraw(a, ok)),
-            (1u128..5_000_000).prop_map(Op::Unstake),
+            any::<bool>().prop_map(Op::ClaimFees),
+            ((1u128..5_000_000), any::<bool>()).prop_map(|(a, ok)| Op::Unstake(a, ok)),
+            any::<bool>().prop_map(Op::Freeze),
         ]
     }
 
-    fn try_(f: impl FnOnce()) {
-        let _ = catch_unwind(AssertUnwindSafe(f));
+    /// Storage, contract state and the token model, saved before a call.
+    struct Snapshot {
+        storage: std::collections::HashMap<Vec<u8>, Vec<u8>>,
+        contract: Vec<u8>,
+        held: u128,
     }
 
-    /// I1, I1b, I4, I6, I11, I12 from the v3 invariant suite.
+    impl H {
+        fn snapshot(&mut self) -> Snapshot {
+            self.c.flush();
+            let storage = near_sdk::mock::with_mocked_blockchain(|b| b.take_storage());
+            let copy = storage.clone();
+            self.install(storage);
+            Snapshot {
+                storage: copy,
+                contract: near_sdk::borsh::to_vec(&self.c).unwrap(),
+                held: self.held,
+            }
+        }
+
+        fn install(&self, storage: std::collections::HashMap<Vec<u8>, Vec<u8>>) {
+            let mut b = VMContextBuilder::new();
+            b.current_account_id(acc(CONTRACT))
+                .block_timestamp(self.now * 1_000_000_000);
+            near_sdk::env::set_blockchain_interface(near_sdk::MockedBlockchain::new(
+                b.build(),
+                near_sdk::test_vm_config(),
+                near_sdk::RuntimeFeesConfig::test(),
+                vec![],
+                storage,
+                Default::default(),
+                None,
+            ));
+        }
+
+        /// A panic rolls the whole call back, as the NEAR runtime does: the
+        /// half-changed contract is forgotten (not dropped — dropping would
+        /// flush its cached writes) and storage is put back.
+        fn restore(&mut self, snap: Snapshot) {
+            let restored: Contract = near_sdk::borsh::from_slice(&snap.contract).unwrap();
+            let broken = std::mem::replace(&mut self.c, restored);
+            std::mem::forget(broken);
+            self.install(snap.storage);
+            self.held = snap.held;
+        }
+
+        /// Call as `who` (with one yocto if `yocto`), atomically.
+        fn call<R>(
+            &mut self,
+            who: &str,
+            yocto: bool,
+            f: impl FnOnce(&mut Contract) -> R,
+        ) -> Option<R> {
+            let snap = self.snapshot();
+            ctx(who, yocto as u128, self.now);
+            match catch_unwind(AssertUnwindSafe(|| f(&mut self.c))) {
+                Ok(r) => Some(r),
+                Err(_) => {
+                    self.restore(snap);
+                    None
+                }
+            }
+        }
+    }
+
+    /// I1, I1b, I4, I6, I10, I11 and I12 from the v3 invariant suite.
     fn check(h: &H, jobs: &[JobId], worker: AgentId) {
         h.check_i1();
         let t = h.c.get_totals();
         let (mut locked, mut bonds, mut dispute_bonds) = (0u128, 0u128, 0u128);
+        let (mut completed, mut unresolved, mut failed, mut lost) = (0u64, 0u64, 0u64, 0u64);
         for id in jobs {
             let j = h.job(*id);
             assert!(j.fee.0 < j.amount.0, "I4");
@@ -829,10 +1192,24 @@ mod invariants {
                 dispute_bonds += j.dispute_bond.0;
                 assert!(j.dispute_deadline > 0);
             }
+            match (j.state, j.outcome) {
+                (JobState::Settled, Some(Outcome::Success)) => completed += 1,
+                (JobState::Settled, Some(Outcome::Unresolved)) => unresolved += 1,
+                (JobState::Refunded, Some(Outcome::Failed)) => failed += 1,
+                (JobState::Refunded, Some(Outcome::DisputeLost)) => lost += 1,
+                (JobState::Settled, other) => panic!("settled with outcome {other:?}"),
+                _ => {}
+            }
         }
         assert_eq!(t.locked.0, locked, "I1b");
         assert_eq!(h.c.stake_of(worker).unwrap().locked.0, bonds, "I11");
         assert_eq!(t.dispute_bonds.0, dispute_bonds, "I12");
+        let r = h.c.worker_record(worker).unwrap();
+        assert_eq!(
+            (r.completed, r.unresolved, r.failed, r.disputes_lost),
+            (completed, unresolved, failed, lost),
+            "I10: records match the jobs that ended"
+        );
     }
 
     proptest! {
@@ -845,44 +1222,54 @@ mod invariants {
                 let last = jobs.last().copied();
                 match op {
                     Op::Create(a) => {
-                        h.as_("c.alice.test");
-                        let r = catch_unwind(AssertUnwindSafe(|| {
-                            h.c.create_job(client, worker, U128(a), SPEC.into(), 300, 1_800)
-                        }));
-                        if let Ok(id) = r { jobs.push(id); }
+                        if let Some(id) = h.call("c.alice.test", false, |c| {
+                            c.create_job(client, worker, U128(a), SPEC.into(), 300, 1_800)
+                        }) { jobs.push(id); }
                     }
                     Op::Direct(a) => {
-                        h.as_("c.alice.test");
-                        let r = catch_unwind(AssertUnwindSafe(|| {
-                            h.c.direct_pay(client, worker, U128(a), SPEC.into())
-                        }));
-                        if let Ok(id) = r { jobs.push(id); }
+                        if let Some(id) = h.call("c.alice.test", false, |c| {
+                            c.direct_pay(client, worker, U128(a), SPEC.into())
+                        }) { jobs.push(id); }
                     }
-                    Op::Accept => if let Some(id) = last { h.as_("w.bob.test"); try_(|| h.c.accept_job(id)); },
-                    Op::Submit => if let Some(id) = last { h.as_("w.bob.test"); try_(|| h.c.submit_result(id, RESULT.into())); },
-                    Op::Approve => if let Some(id) = last { h.as_("c.alice.test"); try_(|| h.c.approve(id, None)); },
-                    Op::Dispute => if let Some(id) = last { h.as_("c.alice.test"); try_(|| h.c.dispute(id, None)); },
-                    Op::Rule(w) => if let Some(id) = last { h.as_("dao.test"); try_(|| h.c.resolve_dispute(id, w)); },
-                    Op::Cancel => if let Some(id) = last { h.as_("c.alice.test"); try_(|| h.c.cancel(id)); },
+                    Op::Accept => if let Some(id) = last { h.call("w.bob.test", false, |c| c.accept_job(id)); },
+                    Op::Submit => if let Some(id) = last { h.call("w.bob.test", false, |c| c.submit_result(id, RESULT.into())); },
+                    Op::Approve => if let Some(id) = last { h.call("c.alice.test", false, |c| c.approve(id, None)); },
+                    Op::Dispute => if let Some(id) = last { h.call("c.alice.test", false, |c| c.dispute(id, None)); },
+                    Op::Rule(w) => if let Some(id) = last { h.call("dao.test", false, |c| c.resolve_dispute(id, w)); },
+                    Op::Cancel => if let Some(id) = last { h.call("c.alice.test", false, |c| c.cancel(id)); },
                     Op::Expire => {
                         for id in jobs.clone() {
-                            h.as_("anyone.test");
-                            try_(|| h.c.expire_unaccepted(id));
-                            try_(|| h.c.expire_undelivered(id));
-                            try_(|| h.c.auto_approve(id));
-                            try_(|| h.c.expire_dispute(id));
+                            h.call("anyone.test", false, |c| c.expire_unaccepted(id));
+                            h.call("anyone.test", false, |c| c.expire_undelivered(id));
+                            h.call("anyone.test", false, |c| c.auto_approve(id));
+                            h.call("anyone.test", false, |c| c.expire_dispute(id));
                         }
                     }
                     Op::Advance(s) => h.advance(s),
                     Op::Withdraw(a, ok) => {
-                        h.as_yocto("bob.test");
-                        let r = catch_unwind(AssertUnwindSafe(|| { let _ = h.c.withdraw(worker, U128(a), None); }));
-                        if r.is_ok() { h.finish_send(ok, "bob.test", a, Refund::Purse(worker)); }
+                        if h.call("bob.test", true, |c| { let _ = c.withdraw(worker, U128(a), None); }).is_some() {
+                            h.finish_send(ok, "bob.test", a, Refund::Purse(worker));
+                        }
                     }
-                    Op::Unstake(a) => {
-                        h.as_yocto("bob.test");
-                        try_(|| h.c.request_unstake(worker, U128(a)));
-                        try_(|| h.c.complete_unstake(worker));
+                    Op::ClaimFees(ok) => {
+                        let owed = h.c.get_totals().fees_owed.0;
+                        if h.call("anyone.test", false, |c| { let _ = c.claim_fees(); }).is_some() {
+                            h.finish_send(ok, "fees.test", owed, Refund::Fees);
+                        }
+                    }
+                    Op::Unstake(a, ok) => {
+                        h.call("bob.test", true, |c| c.request_unstake(worker, U128(a)));
+                        let pending = h.c.stake_of(worker).unwrap().pending.0;
+                        if h.call("bob.test", true, |c| { let _ = c.complete_unstake(worker); }).is_some() {
+                            h.finish_send(ok, "bob.test", pending, Refund::Stake(worker));
+                        }
+                    }
+                    Op::Freeze(on) => {
+                        if on {
+                            h.call("alice.test", false, |c| c.freeze_agent(client));
+                        } else {
+                            h.call("alice.test", true, |c| c.unfreeze_agent(client));
+                        }
                     }
                 }
                 check(&h, &jobs, worker);

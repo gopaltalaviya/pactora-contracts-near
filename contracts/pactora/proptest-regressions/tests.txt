@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc c89ce8fb31c636d8cbca6ade9f2dfb843e1bec388db7813a8d8dd4e0bcc33bd6 # shrinks to ops = [Create(5000)]
 cc 6c815a87aee364d37a88f17552af2f34b122a57f7c234ce75ae5f06e8aa06a49 # shrinks to ops = [Create(5000)]
+cc e2b3c7eb246f3945d80dca61aa2dffd191a314d77f4440a98cff0b7e2777c894 # shrinks to ops = [Create(10000), Accept, Submit, Approve]

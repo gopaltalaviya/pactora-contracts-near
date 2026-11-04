@@ -43,7 +43,8 @@ use types::*;
 /// Gas for the outgoing `ft_transfer` and for our callback after it.
 const GAS_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_ON_SEND: Gas = Gas::from_tgas(10);
-/// What a method that sends tokens must be given, with room for its own work.
+/// Gas a sending method must still have left: the transfer, the callback,
+/// and 10 Tgas for promise creation and the rest of the call.
 const GAS_SEND_MIN: Gas = Gas::from_tgas(30);
 const MAX_CARD_URI: usize = 512;
 /// Bytes a job may still grow by after creation (result hash, review hash,
@@ -103,6 +104,13 @@ fn check_hash(h: &str) {
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
         BAD_HASH
     );
+}
+
+/// Gas left (not gas attached) must cover the transfer, the callback and
+/// the rest of this call.
+fn require_send_gas() {
+    let left = env::prepaid_gas().saturating_sub(env::used_gas());
+    require!(left >= GAS_SEND_MIN, NOT_ENOUGH_GAS);
 }
 
 fn bps_of(amount: u128, bps: u16) -> u128 {
@@ -284,6 +292,7 @@ impl Contract {
             NOT_PENDING_WALLET
         );
         require!(!self.agent_by_wallet.contains_key(&caller), WALLET_TAKEN);
+        let before = env::storage_usage();
         let previous = agent.wallet.take();
         if let Some(old) = &previous {
             self.agent_by_wallet.remove(old);
@@ -292,18 +301,23 @@ impl Contract {
         agent.pending_wallet = None;
         self.agents.insert(agent_id, agent);
         self.agent_by_wallet.insert(caller.clone(), agent_id);
+        // The new wallet index entry is billed to the agent, not the contract.
+        self.charge_storage(agent_id, before, 0);
         events::wallet_accepted(agent_id, &caller, previous.as_ref());
     }
 
     /// Owner proposes a new wallet (key rotation); the old one keeps working
-    /// until the new one accepts.
+    /// until the new one accepts. `None` withdraws a proposal, for example
+    /// one made to a mistyped account.
     #[payable]
-    pub fn propose_wallet(&mut self, agent_id: AgentId, wallet: AccountId) {
+    pub fn propose_wallet(&mut self, agent_id: AgentId, wallet: Option<AccountId>) {
         assert_one_yocto();
         let mut agent = self.owned_agent(agent_id);
-        agent.pending_wallet = Some(wallet.clone());
+        let before = env::storage_usage();
+        agent.pending_wallet = wallet.clone();
         self.agents.insert(agent_id, agent);
-        events::wallet_proposed(agent_id, &wallet);
+        self.charge_storage(agent_id, before, 0);
+        events::wallet_proposed(agent_id, wallet.as_ref());
     }
 
     #[payable]
@@ -311,8 +325,10 @@ impl Contract {
         assert_one_yocto();
         require!(card_uri.len() <= MAX_CARD_URI, CARD_URI_TOO_LONG);
         let mut agent = self.owned_agent(agent_id);
+        let before = env::storage_usage();
         agent.card_uri = card_uri;
         self.agents.insert(agent_id, agent);
+        self.charge_storage(agent_id, before, 0);
     }
 
     /// Kill switch: a frozen agent's wallet can do nothing and it cannot be
@@ -362,7 +378,25 @@ impl Contract {
         let b = self.storage_balance(agent_id);
         require!(amount.0 <= b, INSUFFICIENT_STORAGE);
         self.storage_balances.insert(agent_id, b - amount.0);
-        Promise::new(agent.owner).transfer(NearToken::from_yoctonear(amount.0))
+        Promise::new(agent.owner)
+            .transfer(NearToken::from_yoctonear(amount.0))
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_ON_SEND)
+                    .on_storage_sent(agent_id, amount),
+            )
+    }
+
+    /// A NEAR transfer fails only if the owner account no longer exists; the
+    /// amount then comes back to the contract and to the agent's balance.
+    #[private]
+    pub fn on_storage_sent(&mut self, agent_id: AgentId, amount: U128) -> bool {
+        let ok = near_sdk::is_promise_success();
+        if !ok {
+            let b = self.storage_balance(agent_id);
+            self.storage_balances.insert(agent_id, b + amount.0);
+        }
+        ok
     }
 
     // ═══════════════════════════ money out ═══════════════════════════
@@ -377,6 +411,7 @@ impl Contract {
         receiver: Option<AccountId>,
     ) -> Promise {
         assert_one_yocto();
+        require_send_gas();
         let agent = self.owned_agent(agent_id);
         require!(amount.0 > 0, ZERO_AMOUNT);
         let mut purse = self.purse(agent_id);
@@ -393,6 +428,7 @@ impl Contract {
 
     /// Anyone may push accumulated fees to the fee recipient.
     pub fn claim_fees(&mut self) -> Promise {
+        require_send_gas();
         let amount = self.totals.fees_owed;
         require!(amount > 0, NOTHING_OWED);
         self.totals.fees_owed = 0;
@@ -415,6 +451,13 @@ impl Contract {
                     self.totals.balances += amount.0;
                 }
                 Refund::Fees => self.totals.fees_owed += amount.0,
+                // Back into stake, where the owner can request it again.
+                Refund::Stake(id) => {
+                    let mut s = self.stake(*id);
+                    s.available += amount.0;
+                    self.stakes.insert(*id, s);
+                    self.totals.stakes += amount.0;
+                }
             }
         }
         events::transfer_finished(&receiver, amount.0, &refund, ok);
@@ -452,11 +495,14 @@ impl Contract {
         events::unstake_cancelled(agent_id, amount);
     }
 
-    /// Moves matured stake into the agent's balance; `withdraw` takes it out.
+    /// Pays matured stake to the owner, as v3 `StakeVault.withdraw` does. It
+    /// never passes through the agent's balance, which the agent key could
+    /// spend.
     #[payable]
-    pub fn complete_unstake(&mut self, agent_id: AgentId) {
+    pub fn complete_unstake(&mut self, agent_id: AgentId) -> Promise {
         assert_one_yocto();
-        self.owned_agent(agent_id);
+        require_send_gas();
+        let agent = self.owned_agent(agent_id);
         let mut s = self.stake(agent_id);
         require!(s.pending > 0, NOTHING_PENDING);
         require!(now_s() >= s.unlock_at, STILL_LOCKED);
@@ -465,8 +511,8 @@ impl Contract {
         s.unlock_at = 0;
         self.stakes.insert(agent_id, s);
         self.totals.stakes -= amount;
-        self.credit(agent_id, amount);
         events::unstaked(agent_id, amount);
+        self.send(agent.owner, amount, Refund::Stake(agent_id))
     }
 
     // ═══════════════════════════ escrow ═══════════════════════════
@@ -626,13 +672,17 @@ impl Contract {
         if for_worker {
             self.bump_client(job.client, |r| r.disputes_rejected += 1);
             self.credit(job.worker, bond);
-            events::dispute_bond_settled(job_id, job.worker, bond);
+            if bond > 0 {
+                events::dispute_bond_settled(job_id, job.worker, bond);
+            }
             self.settle(&mut job, Outcome::Success, true);
             self.rate_client(&job, 0);
         } else {
             self.bump_client(job.client, |r| r.disputes_upheld += 1);
             self.credit(job.client, bond);
-            events::dispute_bond_settled(job_id, job.client, bond);
+            if bond > 0 {
+                events::dispute_bond_settled(job_id, job.client, bond);
+            }
             self.refund(&mut job, "dispute", Some(Outcome::DisputeLost));
             self.rate_client(&job, 100);
         }
@@ -688,7 +738,9 @@ impl Contract {
         let bond = job.dispute_bond.0;
         self.totals.dispute_bonds -= bond;
         self.credit(job.client, bond);
-        events::dispute_bond_settled(job_id, job.client, bond);
+        if bond > 0 {
+            events::dispute_bond_settled(job_id, job.client, bond);
+        }
         events::dispute_expired(job_id);
         self.settle(&mut job, Outcome::Unresolved, false);
         self.jobs.insert(job_id, job);
@@ -1114,7 +1166,7 @@ impl Contract {
     /// bucket and is held in `in_flight` until the callback; if the transfer
     /// fails it goes back where it came from.
     fn send(&mut self, receiver: AccountId, amount: u128, refund: Refund) -> Promise {
-        require!(env::prepaid_gas() >= GAS_SEND_MIN, NOT_ENOUGH_GAS);
+        require_send_gas();
         self.totals.in_flight += amount;
         events::transfer_started(&receiver, amount, &refund);
         ext_ft_core::ext(self.token.clone())
@@ -1162,10 +1214,10 @@ impl Contract {
             p.max_work_window,
             p.dispute_timeout,
         ] {
-            require!(w >= 1 && w <= MAX_WINDOW, INVALID_WINDOW);
+            require!((1..=MAX_WINDOW).contains(&w), INVALID_WINDOW);
         }
         require!(
-            p.withdraw_delay >= 1 && p.withdraw_delay <= MAX_WITHDRAW_DELAY,
+            (1..=MAX_WITHDRAW_DELAY).contains(&p.withdraw_delay),
             INVALID_WINDOW
         );
         require!(

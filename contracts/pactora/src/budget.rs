@@ -72,11 +72,7 @@ pub fn next_release_at(p: &Purse, now_s: u64) -> u64 {
     if hour - last >= BUCKETS {
         return 0;
     }
-    let first = if hour >= BUCKETS - 1 {
-        hour - (BUCKETS - 1)
-    } else {
-        0
-    };
+    let first = hour.saturating_sub(BUCKETS - 1);
     for h in first..=last {
         if p.buckets[(h % BUCKETS) as usize] != 0 {
             return (h + BUCKETS) * HOUR;

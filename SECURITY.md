@@ -24,6 +24,27 @@ a NEAR-specific review is part of the hackathon plan (pactora-docs-near).
 - **Trapped funds.** Pause stops new hires only. Every open state has an exit
   anyone may call.
 
+## Known limits, stated plainly
+
+- **I1 is "at least", not "exactly".** `Totals` accounts for every token the
+  contract was given through `ft_transfer_call`. A plain `ft_transfer` to the
+  contract raises its token balance without any agent being credited; such
+  tokens are not owned by anyone in the protocol and there is no sweep. (The
+  same holds for a direct ERC-20 transfer on EVM.) Tests check equality,
+  because they fund only through `ft_transfer_call`.
+- **A callback that never runs.** `on_send` and `on_storage_sent` are given
+  fixed gas and do little work, so they should always complete. If one ever
+  failed, a successful transfer would leave `in_flight` overstated (the
+  accounting reads more than is held) and a failed one would leave the
+  amount stranded in the contract. There is no owner "reconcile" method on
+  purpose: it would be a way to move money that the protocol does not need.
+- **The dispute bond counts against the client's caps,** as it did on EVM
+  (AgentAccount charged it through `execute`). A client that has used its
+  whole daily cap cannot dispute until the window rolls; the owner can raise
+  the caps with `set_caps`.
+- **Reserved job storage is not refunded.** Jobs are history and are never
+  deleted, so their storage stays billed.
+
 ## Reporting
 
 Please report vulnerabilities privately through GitHub's "Report a
