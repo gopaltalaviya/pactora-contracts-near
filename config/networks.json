@@ -1,0 +1,31 @@
+{
+  "_comment": "What each NEAR network is. Keyed by CAIP-2 id (near:<network>, the convention NEAR x402 code uses; ChainAgnostic has no NEAR profile yet). slug names the params/deployments files, because ':' is not allowed in Windows paths. nearNetworkId is what RPC status.chain_id must answer.",
+  "near:testnet": {
+    "chainId": "near:testnet",
+    "slug": "testnet",
+    "nearNetworkId": "testnet",
+    "name": "NEAR Testnet",
+    "shortName": "near-testnet",
+    "testnet": true,
+    "nativeCurrency": {"name": "NEAR", "symbol": "NEAR", "decimals": 24},
+    "rpcUrls": ["https://rpc.testnet.near.org"],
+    "blockSource": {"kind": "neardata", "url": "https://testnet.neardata.xyz"},
+    "blockExplorerUrls": ["https://testnet.nearblocks.io"],
+    "faucetUrls": [],
+    "paymentToken": {"symbol": "mUSDC", "decimals": 6, "accountId": null, "deployWithProtocol": true}
+  },
+  "near:sandbox": {
+    "chainId": "near:sandbox",
+    "slug": "sandbox",
+    "nearNetworkId": "sandbox",
+    "name": "NEAR Sandbox (local)",
+    "shortName": "near-sandbox",
+    "testnet": true,
+    "nativeCurrency": {"name": "NEAR", "symbol": "NEAR", "decimals": 24},
+    "rpcUrls": ["http://127.0.0.1:3030"],
+    "blockSource": {"kind": "rpc"},
+    "blockExplorerUrls": [],
+    "faucetUrls": [],
+    "paymentToken": {"symbol": "mUSDC", "decimals": 6, "accountId": null, "deployWithProtocol": true}
+  }
+}
