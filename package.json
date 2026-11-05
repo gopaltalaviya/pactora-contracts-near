@@ -3,5 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Node tooling for the Pactora contracts repo (ABI export, deployment files, config checks)."
+  "description": "Node tooling for the Pactora contracts repo (ABI export, deployment files, config checks).",
+  "dependencies": {
+    "near-api-js": "7.4.0"
+  },
+  "scripts": {
+    "deploy": "node scripts/deploy.mjs"
+  }
 }

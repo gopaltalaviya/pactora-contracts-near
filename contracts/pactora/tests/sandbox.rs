@@ -79,10 +79,20 @@ async fn check_i1(e: &Env) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The wasm under test: the file `$var` names when set — CI sets it to the
+/// artifact its build job produced, so these tests run the exact bytes that
+/// get deployed — else built from source with cargo-near.
+async fn wasm(var: &str, project: &str) -> anyhow::Result<Vec<u8>> {
+    match std::env::var(var) {
+        Ok(path) => Ok(std::fs::read(&path).map_err(|e| anyhow::anyhow!("{var}={path}: {e}"))?),
+        Err(_) => Ok(near_workspaces::compile_project(project).await?),
+    }
+}
+
 async fn setup() -> anyhow::Result<Env> {
     let worker = near_workspaces::sandbox().await?;
-    let usdc_wasm = near_workspaces::compile_project("../mock-usdc").await?;
-    let pactora_wasm = near_workspaces::compile_project("./").await?;
+    let usdc_wasm = wasm("MOCK_USDC_WASM", "../mock-usdc").await?;
+    let pactora_wasm = wasm("PACTORA_WASM", "./").await?;
     let root = worker.root_account()?;
 
     let usdc = sub(&root, "usdc", 20)

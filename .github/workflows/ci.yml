@@ -58,7 +58,8 @@ jobs:
       - name: Sizes and hashes
         run: |
           ls -l target/near/*/*.wasm
-          sha256sum target/near/*/*.wasm | tee wasm.sha256
+          sha256sum target/near/*/*.wasm | tee target/near/wasm.sha256
+      # All under target/near, so the artifact keeps pactora/ and mock_usdc/ at its root.
       - uses: actions/upload-artifact@v7
         with:
           name: wasm
@@ -66,21 +67,59 @@ jobs:
             target/near/pactora/pactora.wasm
             target/near/pactora/pactora_abi.json
             target/near/mock_usdc/mock_usdc.wasm
-            wasm.sha256
+            target/near/wasm.sha256
           if-no-files-found: error
 
   sandbox:
-    name: sandbox integration tests
+    name: sandbox integration tests (the CI-built wasm)
+    needs: wasm
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-near ${{ env.CARGO_NEAR_VERSION }}
-        run: |
-          curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/near/cargo-near/releases/download/cargo-near-v${CARGO_NEAR_VERSION}/cargo-near-installer.sh" | sh
-      - name: Sandbox tests (local NEAR node, compiled wasm)
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm
+          path: wasm
+      # The exact bytes the wasm job built and that get deployed — not a
+      # second build from source (tests/sandbox.rs reads these when set).
+      - name: Sandbox tests (local NEAR node)
+        env:
+          PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
+          MOCK_USDC_WASM: ${{ github.workspace }}/wasm/mock_usdc/mock_usdc.wasm
         run: cargo test -p pactora --test sandbox -- --test-threads=2
+
+  live:
+    name: deploy + verify-near on a fresh near-sandbox
+    needs: wasm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          name: wasm
+          path: wasm
+      - run: npm ci
+      # near-sandbox 2.14 needs glibc 2.38+; ubuntu-24.04 has 2.39.
+      - name: Start near-sandbox (chain id sandbox, root test.near)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbx" && cd "$RUNNER_TEMP/sbx"
+          npm init -y >/dev/null && npm install --silent near-sandbox@0.3.5
+          npx near-sandbox --home "$RUNNER_TEMP/sbx/home" init --chain-id sandbox --account-id test.near
+          (npx near-sandbox --home "$RUNNER_TEMP/sbx/home" run > "$RUNNER_TEMP/sbx/node.log" 2>&1 &)
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:3030/status >/dev/null && break; sleep 2; done
+          curl -fs http://127.0.0.1:3030/status | head -c 300
+      - name: Deploy, then every flow live (17 checks)
+        env:
+          SANDBOX_KEY_FILE: ${{ runner.temp }}/sbx/home/validator_key.json
+          PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
+          MOCK_USDC_WASM: ${{ github.workspace }}/wasm/mock_usdc/mock_usdc.wasm
+        run: |
+          node scripts/deploy.mjs --network sandbox
+          node scripts/verify-near.mjs --network sandbox
 
   secrets:
     name: no secrets in tracked files
