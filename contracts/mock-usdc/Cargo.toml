@@ -9,6 +9,16 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Reproducible WASM (NEP-330), as in the official cargo-near project template.
+# The image matches the pinned toolchain (rust-toolchain.toml 1.99.1) and the
+# cargo-near version CI installs (0.22.0). The digest identifies the image;
+# it was read from Docker Hub for tag 0.22.0-rust-1.99.1.
+[package.metadata.near.reproducible_build]
+image = "sourcescan/cargo-near:0.22.0-rust-1.99.1"
+image_digest = "sha256:c9655eaf7436b90c87ea8b25739f91063032c5c30ba24cfeafe72c142943b5bb"
+passed_env = []
+container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
+
 [dependencies]
 near-sdk = { workspace = true }
 near-contract-standards = { workspace = true }

@@ -46,10 +46,14 @@ jobs:
           curl --proto '=https' --tlsv1.2 -LsSf \
             "https://github.com/near/cargo-near/releases/download/cargo-near-v${CARGO_NEAR_VERSION}/cargo-near-installer.sh" | sh
           cargo near --version
-      - name: Build both contracts
+      # Reproducible (NEP-330): built inside the pinned image named in each
+      # contract's [package.metadata.near.reproducible_build], from the
+      # committed tree, so anyone can rebuild the same bytes and the deployed
+      # code carries its source link (contract_source_metadata).
+      - name: Build both contracts (reproducible, in Docker)
         run: |
           for c in pactora mock-usdc; do
-            (cd "contracts/$c" && cargo near build non-reproducible-wasm --locked)
+            (cd "contracts/$c" && cargo near build reproducible-wasm)
           done
       - name: Sizes and hashes
         run: |
