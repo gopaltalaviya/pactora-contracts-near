@@ -17,3 +17,5 @@ lcov.info
 # local sandbox node home and fetched DAO code (README "Run it live")
 .sbx/
 dao.wasm
+
+# wasm/ is committed on purpose (the deployed bytes); keep it binary

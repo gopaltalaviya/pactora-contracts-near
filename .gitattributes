@@ -4,3 +4,4 @@
 *.mjs  text eol=lf
 *.yml  text eol=lf
 Makefile text eol=lf
+wasm/*.wasm binary

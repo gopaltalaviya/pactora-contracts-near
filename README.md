@@ -23,6 +23,7 @@ they can't break.*
 | `contracts/mock-usdc` | Testnet-only NEP-141 token with 6 decimals; only its owner mints |
 | `contracts/pactora/src/tests.rs` | Unit tests and a property test of the protocol invariants |
 | `contracts/pactora/tests/sandbox.rs` | Integration tests on a local NEAR node against the compiled wasm |
+| `wasm/` | The deployed bytes: both contracts built in the pinned cargo-near image, sha256 in `wasm/SHA256SUMS`. `scripts/deploy.mjs` deploys these by default and refuses them if a hash differs |
 
 ## How it works, in one paragraph
 

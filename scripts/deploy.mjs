@@ -16,8 +16,8 @@
  *            SANDBOX_KEY_FILE — the sandbox's validator_key.json (test.near)
  *   testnet  DEPLOYER_ACCOUNT_ID, DEPLOYER_SECRET_KEY (ed25519:...),
  *            ARBITER_ACCOUNT_ID — the 2-of-3 Sputnik DAO (scripts/create-dao.mjs)
- *   both     PACTORA_WASM, MOCK_USDC_WASM — the wasm to deploy. On testnet use
- *            the CI-built reproducible artifact; its sha256 is recorded.
+ *   both     PACTORA_WASM, MOCK_USDC_WASM — optional; default wasm/*.wasm,
+ *            checked against wasm/SHA256SUMS. Its sha256 is recorded on testnet.
  */
 import {createHash} from 'node:crypto';
 import {readFileSync, writeFileSync, existsSync} from 'node:fs';
@@ -65,14 +65,26 @@ if (slug === 'sandbox') {
   if (!arbiter) fail('ARBITER_ACCOUNT_ID must name the arbiter DAO — create it with scripts/create-dao.mjs');
 }
 
-const wasmPath = (envName, fallback) => {
-  const p = process.env[envName] ?? join(ROOT, fallback);
-  if (!existsSync(p)) fail(`${envName}: no wasm at ${p} — build it (CI artifact for testnet)`);
-  return p;
-};
-const pactoraWasm = readFileSync(wasmPath('PACTORA_WASM', 'target/near/pactora/pactora.wasm'));
-const usdcWasm = readFileSync(wasmPath('MOCK_USDC_WASM', 'target/near/mock_usdc/mock_usdc.wasm'));
+// Default: the committed build in wasm/ (built in the pinned cargo-near
+// image, sha256 in wasm/SHA256SUMS), so a judge needs no Rust toolchain.
+// PACTORA_WASM / MOCK_USDC_WASM override it, e.g. with a fresh CI artifact.
 const sha = (b) => createHash('sha256').update(b).digest('hex');
+const sums = Object.fromEntries(
+  readFileSync(join(ROOT, 'wasm', 'SHA256SUMS'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => l.trim())
+    .map((l) => l.split(/\s+\*?/).reverse()),
+);
+const loadWasm = (envName, file) => {
+  const p = process.env[envName] ?? join(ROOT, 'wasm', file);
+  if (!existsSync(p)) fail(`${envName}: no wasm at ${p}`);
+  const bytes = readFileSync(p);
+  if (!process.env[envName] && sha(bytes) !== sums[file]) fail(`wasm/${file} does not match wasm/SHA256SUMS`);
+  return bytes;
+};
+const pactoraWasm = loadWasm('PACTORA_WASM', 'pactora.wasm');
+const usdcWasm = loadWasm('MOCK_USDC_WASM', 'mock_usdc.wasm');
 
 const provider = new JsonRpcProvider({url: rpcUrl});
 const status = await provider.viewNodeStatus();
