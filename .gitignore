@@ -13,3 +13,7 @@ node_modules/
 lcov.info
 # near-workspaces sandbox state
 .near/
+
+# local sandbox node home and fetched DAO code (README "Run it live")
+.sbx/
+dao.wasm

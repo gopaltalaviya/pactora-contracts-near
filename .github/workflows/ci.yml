@@ -112,14 +112,18 @@ jobs:
           (npx near-sandbox --home "$RUNNER_TEMP/sbx/home" run > "$RUNNER_TEMP/sbx/node.log" 2>&1 &)
           for i in $(seq 1 60); do curl -fs http://127.0.0.1:3030/status >/dev/null && break; sleep 2; done
           curl -fs http://127.0.0.1:3030/status | head -c 300
-      - name: Deploy, then every flow live (17 checks)
+      - name: Deploy, then every flow live (17 checks), then again with the DAO arbiter (19)
         env:
           SANDBOX_KEY_FILE: ${{ runner.temp }}/sbx/home/validator_key.json
           PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
           MOCK_USDC_WASM: ${{ github.workspace }}/wasm/mock_usdc/mock_usdc.wasm
+          SPUTNIK_DAO_WASM: ${{ runner.temp }}/sputnik-dao.wasm
         run: |
           node scripts/deploy.mjs --network sandbox
           node scripts/verify-near.mjs --network sandbox
+          # The Sputnik DAO code testnet's factory deploys, read from testnet and hash-checked.
+          node scripts/create-dao.mjs --fetch-wasm "$SPUTNIK_DAO_WASM"
+          node scripts/verify-near.mjs --network sandbox --dao
 
   secrets:
     name: no secrets in tracked files

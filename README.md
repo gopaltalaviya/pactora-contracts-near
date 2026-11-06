@@ -51,6 +51,44 @@ cargo test -p pactora --test sandbox             # local NEAR node, real wasm
 CI (`.github/workflows/ci.yml`) runs all of the above on every push and
 uploads the built wasm with its sha256.
 
+Only the cargo-near build is valid: a plain `cargo build` wasm traps every
+refusal as `unreachable` on a real node. Without cargo-near installed, build
+in the pinned image named in each `Cargo.toml`:
+
+```sh
+docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/tmp/cargo -v "$PWD:/host" -w /host/contracts/pactora \
+  sourcescan/cargo-near:0.22.0-rust-1.99.1@sha256:c9655eaf7436b90c87ea8b25739f91063032c5c30ba24cfeafe72c142943b5bb \
+  cargo near build non-reproducible-wasm --locked --no-wasmopt
+```
+
+## Run it live on a local NEAR node
+
+Do this, see that (Docker; `npm ci` first):
+
+```sh
+docker build -t pactora-near-sandbox ../pactora-backend-near/deploy/near-sandbox
+docker run -d --name pactora-sbx -p 127.0.0.1:3030:3030 -v "$PWD/.sbx:/data" pactora-near-sandbox
+export SANDBOX_KEY_FILE=$PWD/.sbx/validator_key.json
+node scripts/deploy.mjs --network sandbox          # → "sandbox deployment matches deployments/sandbox.json"
+node scripts/verify-near.mjs --network sandbox     # → "verify-near: 17 checks passed"
+node scripts/create-dao.mjs --fetch-wasm dao.wasm  # the Sputnik DAO code testnet's factory deploys, hash-checked
+SPUTNIK_DAO_WASM=dao.wasm node scripts/verify-near.mjs --network sandbox --dao   # → "19 checks passed"
+```
+
+`--dao` makes a 2-of-3 Sputnik DAO the arbiter and shows an outsider refused,
+one vote not ruling, and two votes refunding the client.
+
+## Testnet
+
+```sh
+cp .env.example .env    # set DEPLOYER_ACCOUNT_ID and DEPLOYER_SECRET_KEY
+node --env-file=.env scripts/create-dao.mjs --network testnet   # council + DAO; ids and keys go to .env only
+node --env-file=.env scripts/deploy.mjs --network testnet       # writes deployments/testnet.json
+node --env-file=.env scripts/verify-near.mjs --network testnet  # every flow, the DAO ruling included
+```
+
+Mainnet is refused by every script.
+
 ## Licence
 
 MIT — see `LICENSE`.

@@ -28,6 +28,7 @@ import {createHash} from 'node:crypto';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, nearToYocto} from 'near-api-js';
+import {deployDaoSandbox, proposeRuling, vote} from './lib/dao.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (n) => (process.argv.includes(`--${n}`) ? process.argv[process.argv.indexOf(`--${n}`) + 1] : undefined);
@@ -117,6 +118,16 @@ async function refused(promise, reason, what) {
     if (!String(e.message).includes(reason)) throw new Error(`${what}: refused, but not with ${reason}: ${e.message}`);
     ok(what, `(refused: ${reason})`);
   }
+}
+
+/** Testnet: the two council members besides the deployer (scripts/create-dao.mjs wrote them to .env). */
+function councilFromEnv() {
+  return [1, 2].map((i) => {
+    const id = process.env[`COUNCIL_${i}_ACCOUNT_ID`];
+    const secret = process.env[`COUNCIL_${i}_SECRET_KEY`];
+    if (!id || !secret) throw new Error(`COUNCIL_${i}_ACCOUNT_ID and COUNCIL_${i}_SECRET_KEY must be set (scripts/create-dao.mjs)`);
+    return new Account(id, provider, new KeyPairSigner(KeyPair.fromString(secret)));
+  });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -242,14 +253,46 @@ const j2 = await hire(2);
 await call(workerBot.account, contracts.Pactora, 'accept_job', {job_id: j2});
 await call(workerBot.account, contracts.Pactora, 'submit_result', {job_id: j2, result_hash: sha(`${run}:result:2`)});
 await call(clientBot.account, contracts.Pactora, 'dispute', {job_id: j2, reason_hash: sha('the result is wrong')});
-if (slug === 'sandbox') {
+const useDao = slug === 'testnet' || process.argv.includes('--dao');
+if (!useDao) {
   const arb = new Account(contracts.Arbiter, provider, new KeyPairSigner(rootKey));
   const ruled = await call(arb, contracts.Pactora, 'resolve_dispute', {job_id: j2, for_worker: false});
   const job2 = await view(contracts.Pactora, 'get_job', {job_id: j2});
   if (job2.state !== 'Refunded' || job2.outcome !== 'DisputeLost') throw new Error(`job ${j2}: ${JSON.stringify(job2)}`);
   ok('dispute ruled for the client by the arbiter: refunded, worker marked DisputeLost', link(ruled.hash));
 } else {
-  ok(`dispute opened on job ${j2}; on testnet the arbiter is the DAO — rule it with scripts/dao-resolve.mjs`);
+  // The arbiter is a 2-of-3 Sputnik DAO: one vote must not rule, two must.
+  let daoId;
+  let council;
+  if (slug === 'sandbox') {
+    const members = [await newOwner('council-1'), await newOwner('council-2'), await newOwner('council-3')];
+    council = members.map((m) => m.account);
+    daoId = `${run}-dao.${rootId}`;
+    const wasmPath = process.env.SPUTNIK_DAO_WASM;
+    if (!wasmPath || !existsSync(wasmPath)) throw new Error('--dao on the sandbox needs SPUTNIK_DAO_WASM (scripts/create-dao.mjs --fetch-wasm writes it)');
+    await deployDaoSandbox(root, daoId, readFileSync(wasmPath), members.map((m) => m.id));
+    await call(root, contracts.Pactora, 'set_arbiter', {arbiter: daoId}, {deposit: 1n});
+  } else {
+    daoId = contracts.Arbiter;
+    council = [root, ...councilFromEnv()];
+  }
+  const roles = await view(contracts.Pactora, 'get_roles');
+  if (roles.arbiter !== daoId) throw new Error(`Pactora's arbiter is ${roles.arbiter}, expected the DAO ${daoId}`);
+  try {
+    // An outsider (the worker's owner, not on the council) cannot even propose.
+    await refused(proposeRuling(worker.account, daoId, contracts.Pactora, j2, true, 'pay me'), 'ERR_PERMISSION_DENIED', 'a non-member proposing a ruling to the DAO');
+    const p = await proposeRuling(council[0], daoId, contracts.Pactora, j2, false, `Pactora job ${j2}: the result is wrong, refund the client`);
+    await vote(council[0], daoId, p.id, p.kind);
+    const still = await view(contracts.Pactora, 'get_job', {job_id: j2});
+    if (still.state !== 'Disputed') throw new Error(`one council vote ruled job ${j2}: ${JSON.stringify(still)}`);
+    ok(`one DAO vote of three does not rule: job ${j2} still Disputed (proposal ${p.id})`);
+    const passed2 = await vote(council[1], daoId, p.id, p.kind);
+    const job2 = await view(contracts.Pactora, 'get_job', {job_id: j2});
+    if (job2.state !== 'Refunded' || job2.outcome !== 'DisputeLost') throw new Error(`job ${j2} after 2 votes: ${JSON.stringify(job2)}`);
+    ok(`dispute ruled by the DAO arbiter ${daoId}, 2 of 3 votes: refunded, worker marked DisputeLost`, link(passed2));
+  } finally {
+    if (slug === 'sandbox') await call(root, contracts.Pactora, 'set_arbiter', {arbiter: contracts.Arbiter}, {deposit: 1n});
+  }
 }
 
 // ── every exit anyone may call ───────────────────────────────────────────
