@@ -22,3 +22,8 @@ dao.wasm
 
 # saved keys of throwaway testnet accounts (scripts/lib/throwaway.mjs)
 .keys/
+# key files never committed, wherever a sandbox home lands
+.sandbox/
+*keypair*.json
+validator_key.json
+node_key.json
