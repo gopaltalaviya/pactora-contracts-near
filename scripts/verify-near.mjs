@@ -12,6 +12,9 @@
  * contract — and checks each result on chain. Every transaction hash is printed.
  *
  * Fresh accounts each run (`v<timestamp>` prefix), created under the deployer.
+ * On testnet each account's key is saved under .keys/testnet/ before the
+ * account is created, and the full-access ones are deleted back into the
+ * deployer at the end (and at the start, for a run that stopped half-way).
  * Testnet only for real chains; it refuses anything else.
  *
  * Checks, in order:
@@ -30,6 +33,7 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, nearToYocto} from 'near-api-js';
 import {deployDaoSandbox, proposeRuling, vote} from './lib/dao.mjs';
+import {saveKey, sweep} from './lib/throwaway.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (n) => (process.argv.includes(`--${n}`) ? process.argv[process.argv.indexOf(`--${n}`) + 1] : undefined);
@@ -141,10 +145,12 @@ async function waitUntilChain(t) {
 // ── accounts ─────────────────────────────────────────────────────────────
 const run = `v${Date.now().toString(36)}`;
 console.log(`verify-near on near:${slug} — run ${run}, contracts ${JSON.stringify(contracts)}`);
+await sweep(ROOT, slug, provider, rootId);
 
 async function newOwner(name) {
   const kp = KeyPair.fromRandom('ed25519');
   const id = `${run}-${name}.${rootId}`;
+  saveKey(ROOT, slug, id, kp, {fullAccess: true});
   const out = await root.signAndSendTransaction({
     receiverId: id,
     actions: [actions.createAccount(), actions.transfer(nearToYocto(slug === 'sandbox' ? '20' : '2')), actions.addFullAccessKey(kp.getPublicKey())],
@@ -157,11 +163,15 @@ async function newOwner(name) {
 async function newWallet(owner) {
   const kp = KeyPair.fromRandom('ed25519');
   const id = `bot.${owner.id}`;
+  saveKey(ROOT, slug, id, kp, {fullAccess: false});
   await owner.account.signAndSendTransaction({
     receiverId: id,
     actions: [
       actions.createAccount(),
-      actions.transfer(nearToYocto('0.5')),
+      // 0.2 NEAR, not more: no key can ever take back what a function-call-only
+      // account holds. A call reserves its 100 TGas at the pessimistic gas price
+      // up front (about 0.101 NEAR, so 0.1 is refused); a full run burns under 0.004.
+      actions.transfer(nearToYocto('0.2')),
       actions.addFunctionCallAccessKey(kp.getPublicKey(), contracts.Pactora, [], nearToYocto('0.25')),
     ],
     waitUntil: 'FINAL',
@@ -356,3 +366,4 @@ if (totals.sum !== held) throw new Error(`I1: get_totals.sum ${totals.sum} != ft
 ok(`I1: the contract holds exactly what it owes — ${held} base units`, JSON.stringify(totals));
 
 console.log(`\nverify-near: ${passed} checks passed on near:${slug}`);
+await sweep(ROOT, slug, provider, rootId);

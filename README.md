@@ -95,7 +95,20 @@ cp .env.example .env    # set DEPLOYER_ACCOUNT_ID and DEPLOYER_SECRET_KEY
 node --env-file=.env scripts/create-dao.mjs --network testnet   # council + DAO; ids and keys go to .env only
 node --env-file=.env scripts/deploy.mjs --network testnet       # writes deployments/testnet.json
 node --env-file=.env scripts/verify-near.mjs --network testnet  # every flow, the DAO ruling included
+node --env-file=.env scripts/sweep-testnet.mjs                  # only after a run that stopped half-way
 ```
+
+The deployer is **your own account**, and no script asks you to fund an account
+whose key you do not hold:
+- `deploy` gives each contract account the deployer's own key.
+- `create-dao` writes the two council keys into your `.env`, or uses your own
+  council accounts if you set `COUNCIL_1_*` and `COUNCIL_2_*` first.
+- `verify-near` saves each test account's key to `.keys/testnet/` (gitignored)
+  before it creates the account. At the end it deletes the full-access ones
+  back into the deployer, which returns their NEAR. It does the same at the
+  start of the next run, for a run that stopped half-way.
+
+`scripts/sweep-check.mjs` checks that path live on the sandbox.
 
 **Budget: about 25 testnet NEAR for one full pass**, more than one faucet
 request, so fund the deployer before starting:
@@ -104,7 +117,7 @@ request, so fund the deployer before starting:
 |---|---|---|
 | `create-dao` | ~8 | 6 to the Sputnik factory for the DAO's storage; 1 each to two council accounts |
 | `deploy` | ~9 | 3 to the mUSDC account, 6 to the Pactora account (contract storage) |
-| `verify-near`, each run | ~7.5 | three fresh owners at 2, and their agent wallets at 0.5 |
+| `verify-near`, each run | ~7 while it runs, ~1 spent | Three fresh owners at 2 each, deleted back into the deployer at the end. Their agent wallets at 0.2 each stay where they are: a function-call key cannot move NEAR, by design, though their keys are saved. Registration and token-storage deposits go to your contract accounts |
 
 Mainnet is refused by every script.
 

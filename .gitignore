@@ -19,3 +19,6 @@ lcov.info
 dao.wasm
 
 # wasm/ is committed on purpose (the deployed bytes); keep it binary
+
+# saved keys of throwaway testnet accounts (scripts/lib/throwaway.mjs)
+.keys/
