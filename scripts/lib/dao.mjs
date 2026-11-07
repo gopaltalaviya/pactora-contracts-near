@@ -3,8 +3,11 @@
  *
  * Pactora's `resolve_dispute` checks only `predecessor == arbiter`. With the
  * arbiter set to a DAO, a ruling is a DAO proposal — a FunctionCall to
- * Pactora — that executes only when the council has voted it through. No one
- * member, the deployer included, can rule alone.
+ * Pactora — that executes only when the council has voted it through. No
+ * one member can rule THROUGH THE DAO alone. But until ownership is handed
+ * to the DAO, Pactora's owner (the deployer) can still `set_arbiter` to
+ * itself and rule directly, and holds a full-access key on the contract
+ * account: on testnet today the owner is a single key (README "Trust").
  *
  * Testnet: the DAO is created by the official factory `sputnikv2.testnet`
  * (checked 2026-11-05: 5,403 DAOs, `get_daos` works). Sandbox: the factory

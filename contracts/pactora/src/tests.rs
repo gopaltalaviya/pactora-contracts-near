@@ -427,6 +427,34 @@ fn happy_path_pays_the_worker_and_rates_both() {
     h.check_i1();
 }
 
+/// A stolen worker wallet key must not hand the stake away as bonds: it
+/// could accept jobs from an accomplice's client and never deliver, and
+/// expire_undelivered would pay every bond to that client. Bonds the wallet
+/// locks count toward the worker's own caps, so the most it can lose is them.
+#[test]
+fn a_worker_wallet_cannot_lock_bonds_beyond_its_caps() {
+    let (mut h, client, worker) = market();
+    h.as_yocto("bob.test");
+    h.c.set_caps(worker, U128(100_000), U128(300_000));
+
+    let big = create(&mut h, client, worker, 1_000_000); // bond 200_000
+    h.as_("w.bob.test");
+    expect_panic("PerTaskCapExceeded", || h.c.accept_job(big));
+    assert_eq!(h.c.stake_of(worker).unwrap().locked.0, 0);
+
+    // Three bonds of 80_000 fit the 300_000 day; the fourth does not.
+    for _ in 0..3 {
+        let id = create(&mut h, client, worker, 400_000);
+        h.as_("w.bob.test");
+        h.c.accept_job(id);
+    }
+    assert_eq!(h.c.stake_of(worker).unwrap().locked.0, 240_000);
+    let fourth = create(&mut h, client, worker, 400_000);
+    h.as_("w.bob.test");
+    expect_panic("DailyCapExceeded", || h.c.accept_job(fourth));
+    h.check_i1();
+}
+
 #[test]
 fn approve_still_works_after_the_review_window() {
     let (mut h, client, worker) = market();

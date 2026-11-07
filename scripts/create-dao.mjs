@@ -25,7 +25,7 @@ import {DAO_CODE_HASH, FACTORY_TESTNET, codeHash, createDaoTestnet} from './lib/
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_FILE = join(ROOT, '.env');
-const TESTNET_RPC = process.env.RPC_URL_TESTNET ?? 'https://rpc.testnet.near.org';
+const TESTNET_RPC = process.env.RPC_URL_TESTNET || 'https://rpc.testnet.near.org';
 const arg = (n) => (process.argv.includes(`--${n}`) ? process.argv[process.argv.indexOf(`--${n}`) + 1] : undefined);
 const fail = (m) => {
   console.error(`create-dao: ${m}`);
@@ -69,25 +69,30 @@ if (existsSync(ENV_FILE) && !readFileSync(ENV_FILE, 'utf8').endsWith('\n')) appe
 
 const council = [deployerId];
 for (const i of [1, 2]) {
-  const id = process.env[`COUNCIL_${i}_ACCOUNT_ID`] ?? `council-${i}.${deployerId}`;
-  if (!process.env[`COUNCIL_${i}_SECRET_KEY`]) {
+  const id = process.env[`COUNCIL_${i}_ACCOUNT_ID`] || `council-${i}.${deployerId}`;
+  let secret = process.env[`COUNCIL_${i}_SECRET_KEY`];
+  if (!secret) {
     if (await exists(id)) fail(`${id} exists but its key is not in .env (COUNCIL_${i}_SECRET_KEY)`);
-    const kp = KeyPair.fromRandom('ed25519');
+    // Saved BEFORE the account is created: if the RPC fails after the
+    // transaction lands, the key is not lost — the next run finds it here.
+    secret = KeyPair.fromRandom('ed25519').toString();
+    remember(`COUNCIL_${i}_ACCOUNT_ID`, id);
+    remember(`COUNCIL_${i}_SECRET_KEY`, secret);
+  }
+  if (await exists(id)) {
+    console.log(`  ${id} (key from .env)`);
+  } else {
     await deployer.signAndSendTransaction({
       receiverId: id,
-      actions: [actions.createAccount(), actions.transfer(nearToYocto('1')), actions.addFullAccessKey(kp.getPublicKey())],
+      actions: [actions.createAccount(), actions.transfer(nearToYocto('1')), actions.addFullAccessKey(KeyPair.fromString(secret).getPublicKey())],
       waitUntil: 'FINAL',
     });
-    remember(`COUNCIL_${i}_ACCOUNT_ID`, id);
-    remember(`COUNCIL_${i}_SECRET_KEY`, kp.toString());
     console.log(`  created ${id} (key saved to .env)`);
-  } else {
-    console.log(`  ${id} (from .env)`);
   }
   council.push(id);
 }
 
-const name = `pactora-arbiter-${deployerId.replace(/\.testnet$/, '').replace(/[^a-z0-9-]/g, '-')}`.slice(0, 40);
+const name = `pactora-arbiter-${deployerId.replace(/\.testnet$/, '').replace(/[^a-z0-9-]/g, '-')}`.slice(0, 40).replace(/-+$/, '');
 let daoId = `${name}.${FACTORY_TESTNET}`;
 if (await exists(daoId)) {
   console.log(`  ${daoId} exists`);

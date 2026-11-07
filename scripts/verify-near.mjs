@@ -18,7 +18,8 @@
  *   registration (register_agent + accept_wallet by the wallet's FC key),
  *   funding and staking (ft_transfer_call), the escrow happy path, direct_pay,
  *   a per-task cap refusal, self-dealing refusal, an FC key refused on
- *   withdraw while the owner can withdraw, a dispute ruled by the arbiter,
+ *   withdraw while the owner can withdraw, a stolen worker FC key refused
+ *   locking a bond beyond its caps, a dispute ruled by the arbiter,
  *   every exit anyone may call (expire_unaccepted, expire_undelivered,
  *   auto_approve, expire_dispute), and invariant I1: the contract's token
  *   balance equals the sum of what it owes (get_totals).
@@ -50,12 +51,12 @@ let rpcUrl;
 let rootId;
 let rootSecret;
 if (slug === 'sandbox') {
-  rpcUrl = process.env.SANDBOX_RPC ?? net.rpcUrls[0];
-  const k = JSON.parse(readFileSync(process.env.SANDBOX_KEY_FILE ?? '', 'utf8'));
+  rpcUrl = process.env.SANDBOX_RPC || net.rpcUrls[0];
+  const k = JSON.parse(readFileSync(process.env.SANDBOX_KEY_FILE || '', 'utf8'));
   rootId = k.account_id;
   rootSecret = k.secret_key;
 } else {
-  rpcUrl = process.env.RPC_URL_TESTNET ?? net.rpcUrls[0];
+  rpcUrl = process.env.RPC_URL_TESTNET || net.rpcUrls[0];
   rootId = process.env.DEPLOYER_ACCOUNT_ID;
   rootSecret = process.env.DEPLOYER_SECRET_KEY;
   if (!rootId?.endsWith('.testnet') || !rootSecret) {
@@ -247,6 +248,25 @@ await refused(
 await refused(call(clientBot.account, contracts.Pactora, 'withdraw', {agent_id: A.id, amount: '1'}), 'Requires attached deposit of exactly 1 yoctoNEAR', 'withdraw without the yocto');
 const w = await call(client.account, contracts.Pactora, 'withdraw', {agent_id: A.id, amount: '10000'}, {deposit: 1n, gas: 100n * TGAS});
 ok("the owner's full-access key withdraws", link(w.hash));
+
+// ── a leaked WORKER key cannot hand its stake away as bonds ──────────────
+// The attacker registers its own client agent with high caps and hires the
+// victim for a large job. If the stolen worker wallet could accept it, the
+// attacker would let it expire undelivered and collect the seized bond.
+// Bonds count toward the worker's own caps, so this is refused.
+const attacker = await newOwner('attacker');
+const attackerBot = await newWallet(attacker);
+await call(attacker.account, contracts.PaymentToken, 'storage_deposit', {account_id: attacker.id, registration_only: true}, {deposit: BigInt(bounds.min)});
+await call(root, contracts.PaymentToken, 'mint', {account_id: attacker.id, amount: '10000000'});
+const X = await register(attacker, attackerBot);
+await call(attacker.account, contracts.Pactora, 'set_caps', {agent_id: X.id, per_task_cap: '5000000', daily_cap: '5000000'}, {deposit: 1n});
+await ftCall(attacker, '2000000', {Fund: {agent_id: X.id}});
+const jb = (await call(attackerBot.account, contracts.Pactora, 'create_job', {client_id: X.id, worker_id: B.id, amount: '1000000', spec_hash: spec('bond'), accept_window: 60, work_window: 60})).value;
+const bondOf = BigInt((await view(contracts.Pactora, 'get_job', {job_id: jb})).worker_bond);
+const workerCap = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: B.id})).per_task_cap);
+if (bondOf <= workerCap) throw new Error(`setup: bond ${bondOf} must exceed the worker's per-task cap ${workerCap}`);
+await refused(call(workerBot.account, contracts.Pactora, 'accept_job', {job_id: jb}), 'PerTaskCapExceeded', `the worker's wallet key locking a ${bondOf} bond above its ${workerCap} per-task cap`);
+await call(attackerBot.account, contracts.Pactora, 'cancel', {job_id: jb});
 
 // ── dispute, ruled by the arbiter ────────────────────────────────────────
 const j2 = await hire(2);

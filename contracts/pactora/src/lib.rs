@@ -600,6 +600,12 @@ impl Contract {
         if bond > 0 {
             let mut s = self.stake(job.worker);
             require!(s.unlocked() >= bond, INSUFFICIENT_BOND);
+            // The bond counts toward the worker's own caps: a stolen wallet
+            // key could otherwise accept jobs it never delivers and hand the
+            // whole stake to an accomplice client through expire_undelivered.
+            let mut p = self.purse(job.worker);
+            budget::charge(&mut p, bond, now_s());
+            self.purses.insert(job.worker, p);
             s.locked += bond;
             self.stakes.insert(job.worker, s);
             job.bond_locked = true;

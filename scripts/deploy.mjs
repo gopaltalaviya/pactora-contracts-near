@@ -48,7 +48,7 @@ let deployerId;
 let secret;
 let arbiter;
 if (slug === 'sandbox') {
-  rpcUrl = process.env.SANDBOX_RPC ?? net.rpcUrls[0];
+  rpcUrl = process.env.SANDBOX_RPC || net.rpcUrls[0];
   const keyFile = process.env.SANDBOX_KEY_FILE;
   if (!keyFile || !existsSync(keyFile)) fail('SANDBOX_KEY_FILE must name the sandbox validator_key.json');
   const k = JSON.parse(readFileSync(keyFile, 'utf8'));
@@ -56,7 +56,7 @@ if (slug === 'sandbox') {
   secret = k.secret_key;
   if (deployerId !== 'test.near') fail(`the sandbox root is ${deployerId}, deployments/sandbox.json expects test.near`);
 } else {
-  rpcUrl = process.env.RPC_URL_TESTNET ?? net.rpcUrls[0];
+  rpcUrl = process.env.RPC_URL_TESTNET || net.rpcUrls[0];
   deployerId = process.env.DEPLOYER_ACCOUNT_ID;
   secret = process.env.DEPLOYER_SECRET_KEY;
   arbiter = process.env.ARBITER_ACCOUNT_ID;
@@ -77,7 +77,8 @@ const sums = Object.fromEntries(
     .map((l) => l.split(/\s+\*?/).reverse()),
 );
 const loadWasm = (envName, file) => {
-  const p = process.env[envName] ?? join(ROOT, 'wasm', file);
+  // `||`, not `??`: a line left empty in .env (as copied from .env.example) is "", not unset.
+  const p = process.env[envName] || join(ROOT, 'wasm', file);
   if (!existsSync(p)) fail(`${envName}: no wasm at ${p}`);
   const bytes = readFileSync(p);
   if (!process.env[envName] && sha(bytes) !== sums[file]) fail(`wasm/${file} does not match wasm/SHA256SUMS`);
