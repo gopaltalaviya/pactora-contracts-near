@@ -24,7 +24,9 @@
  *   withdraw while the owner can withdraw, a stolen worker FC key refused
  *   locking a bond beyond its caps, a dispute ruled by the arbiter,
  *   every exit anyone may call (expire_unaccepted, expire_undelivered,
- *   auto_approve, expire_dispute), and invariant I1: the contract's token
+ *   auto_approve, expire_dispute), a PERSON (one full-access account that is
+ *   both owner and wallet) registering, staking, being hired, delivering and
+ *   being paid, with SameOwner refused against its own agents, and invariant I1: the contract's token
  *   balance equals the sum of what it owes (get_totals).
  */
 import {readFileSync, existsSync} from 'node:fs';
@@ -358,6 +360,56 @@ if (params.review_window <= 60) {
 } else {
   console.log(`  - auto_approve / expire_dispute skipped: the review window is ${params.review_window} s here (sandbox uses 10 s)`);
 }
+
+// ── a PERSON takes part: no wallet split, no contract change ─────────────
+// A person is just an account that is its own owner AND its own wallet, with
+// a full-access key. Same contract, same calls; the only difference is who signs.
+const person = await newOwner('person');
+await call(person.account, contracts.PaymentToken, 'storage_deposit', {account_id: person.id, registration_only: true}, {deposit: BigInt(bounds.min)});
+await call(root, contracts.PaymentToken, 'mint', {account_id: person.id, amount: '50000000'});
+const pr = await call(person.account, contracts.Pactora, 'register_agent', {wallet: person.id, card_uri: `data:,${run}-person`, per_task_cap: null, daily_cap: null}, {deposit: nearToYocto('0.1')});
+const P = pr.value;
+const pAccepted = await call(person.account, contracts.Pactora, 'accept_wallet', {agent_id: P});
+const agentP = await view(contracts.Pactora, 'get_agent', {agent_id: P});
+if (agentP.owner !== person.id || agentP.wallet !== person.id) throw new Error(`person agent: ${JSON.stringify(agentP)}`);
+ok(`a person (full-access key) registers agent ${P} as its own wallet and accepts it: owner == wallet == ${person.id}`, link(pAccepted.hash));
+
+await ftCall(person, String(BigInt(params.min_stake) + 100000n), {Stake: {agent_id: P}});
+if (!(await view(contracts.Pactora, 'is_hireable', {agent_id: P}))) throw new Error('person not hireable after staking');
+ok('the person staked via ft_transfer_call and is hireable');
+
+const pBefore = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: P})).balance);
+const jp = (await call(clientBot.account, contracts.Pactora, 'create_job', {client_id: A.id, worker_id: P, amount: '50000', spec_hash: spec('person'), accept_window: 60, work_window: 60})).value;
+await call(person.account, contracts.Pactora, 'accept_job', {job_id: jp});
+await call(person.account, contracts.Pactora, 'submit_result', {job_id: jp, result_hash: sha(`${run}:result:person`)});
+const pApproved = await call(clientBot.account, contracts.Pactora, 'approve', {job_id: jp, review_hash: sha('person did fine')});
+const jobP = await view(contracts.Pactora, 'get_job', {job_id: jp});
+const pAfter = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: P})).balance);
+const feeP = BigInt(jobP.fee);
+if (jobP.state !== 'Settled' || jobP.outcome !== 'Success' || pAfter - pBefore !== 50000n - feeP) {
+  throw new Error(`person job ${jp}: ${JSON.stringify(jobP)}; person +${pAfter - pBefore}`);
+}
+ok(`an agent hires the person: accepted and submitted with its own full-access key, approved — person paid ${50000n - feeP} (fee ${feeP})`, link(pApproved.hash));
+
+// Self-dealing across one owner: the person cannot hire an agent it owns, even
+// when that agent's wallet is a different account.
+const personBot = await newWallet(person);
+const Q = await register(person, personBot);
+const agentQ = await view(contracts.Pactora, 'get_agent', {agent_id: Q.id});
+if (agentQ.owner !== person.id || agentQ.wallet !== personBot.id) throw new Error(`second person agent: ${JSON.stringify(agentQ)}`);
+await ftCall(person, String(BigInt(params.min_stake) + 100000n), {Stake: {agent_id: Q.id}});
+await ftCall(person, '1000000', {Fund: {agent_id: P}});
+await refused(
+  call(person.account, contracts.Pactora, 'create_job', {client_id: P, worker_id: Q.id, amount: '50000', spec_hash: spec('same1'), accept_window: 60, work_window: 60}),
+  'SameOwner',
+  'the person hiring an agent it owns (wallet is a separate account)',
+);
+await ftCall(person, '1000000', {Fund: {agent_id: Q.id}});
+await refused(
+  call(personBot.account, contracts.Pactora, 'create_job', {client_id: Q.id, worker_id: P, amount: '50000', spec_hash: spec('same2'), accept_window: 60, work_window: 60}),
+  'SameOwner',
+  "the person's second agent hiring the person's first agent (same owner, different wallets)",
+);
 
 // ── I1 ───────────────────────────────────────────────────────────────────
 const totals = await view(contracts.Pactora, 'get_totals');

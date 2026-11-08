@@ -71,10 +71,14 @@ docker build -t pactora-near-sandbox ../pactora-backend-near/deploy/near-sandbox
 docker run -d --name pactora-sbx -p 127.0.0.1:3030:3030 -v "$PWD/.sbx:/data" pactora-near-sandbox
 export SANDBOX_KEY_FILE=$PWD/.sbx/validator_key.json
 node scripts/deploy.mjs --network sandbox          # → "sandbox deployment matches deployments/sandbox.json"
-node scripts/verify-near.mjs --network sandbox     # → "verify-near: 18 checks passed"
+node scripts/verify-near.mjs --network sandbox     # → "verify-near: 23 checks passed"
 node scripts/create-dao.mjs --fetch-wasm dao.wasm  # the Sputnik DAO code testnet's factory deploys, hash-checked
-SPUTNIK_DAO_WASM=dao.wasm node scripts/verify-near.mjs --network sandbox --dao   # → "20 checks passed"
+SPUTNIK_DAO_WASM=dao.wasm node scripts/verify-near.mjs --network sandbox --dao   # → "25 checks passed"
 ```
+
+The run also shows a person (one full-access account that is its own owner and
+wallet) registering, staking, being hired and paid, and `SameOwner` refusing
+it against its own agents: no contract change needed.
 
 `--dao` makes a 2-of-3 Sputnik DAO the arbiter and shows an outsider refused,
 one vote not ruling, and two votes refunding the client.
