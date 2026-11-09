@@ -42,6 +42,8 @@ pub const WITHDRAW_ALREADY_PENDING: &str = "WithdrawAlreadyPending";
 pub const NOTHING_PENDING: &str = "NothingPending";
 pub const STILL_LOCKED: &str = "StillLocked";
 pub const NOTHING_OWED: &str = "NothingOwed";
+pub const NO_SURPLUS: &str = "NoSurplus";
+pub const BALANCE_UNKNOWN: &str = "BalanceUnknown";
 
 pub const INSUFFICIENT_STORAGE: &str = "InsufficientStorage";
 pub const NOT_ENOUGH_GAS: &str = "NotEnoughGas";

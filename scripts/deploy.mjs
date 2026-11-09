@@ -5,11 +5,13 @@
  *   node scripts/deploy.mjs --network sandbox   # local near-sandbox (Docker)
  *   node scripts/deploy.mjs --network testnet   # NEAR testnet — never mainnet
  *
- * Each contract account is created, funded, given the deployer's key, has its
- * wasm deployed and its `new` called IN ONE TRANSACTION, so nobody can call
- * `new` on a half-deployed contract first. The params are
- * config/params.<slug>.json `onchain`, byte for byte, and the script reads
- * `get_params` back and refuses to write the deployment if they differ.
+ * Each contract account is created, funded and given the deployer's key in
+ * one transaction; then, signed AS THAT ACCOUNT with the same key, its wasm
+ * is deployed and `new` called in a second one. `new` is `#[private]` on both
+ * contracts (only the contract account may call it), so nobody can call it
+ * on freshly deployed code first. The params are config/params.<slug>.json
+ * `onchain`, byte for byte, and the script reads `get_params` back and
+ * refuses to write the deployment if they differ.
  *
  * Env (secrets only in .env, never on the command line):
  *   sandbox  SANDBOX_RPC (default http://127.0.0.1:3030),
@@ -101,20 +103,28 @@ const exists = async (id) =>
     () => false,
   );
 
-/** Create the account, fund it, add the deployer's key, deploy and init — one transaction. */
+/**
+ * Create the account, fund it and add the deployer's key; then, as that
+ * account, deploy the code and call `new` (private: only the account itself
+ * may initialise, so the two steps need no atomicity).
+ */
 async function createAndDeploy(accountId, wasm, nearAmount, init) {
   if (await exists(accountId)) fail(`${accountId} already exists — this script does not overwrite a deployment`);
   const out = await deployer.signAndSendTransaction({
     receiverId: accountId,
-    actions: [
-      actions.createAccount(),
-      actions.transfer(nearToYocto(nearAmount)),
-      actions.addFullAccessKey(keyPair.getPublicKey()),
-      ...(wasm ? [actions.deployContract(wasm), actions.functionCall('new', init, 300n * TGAS, 0n)] : []),
-    ],
+    actions: [actions.createAccount(), actions.transfer(nearToYocto(nearAmount)), actions.addFullAccessKey(keyPair.getPublicKey())],
     waitUntil: 'FINAL',
   });
-  console.log(`  ${accountId}  ${out.transaction.hash}`);
+  console.log(`  ${accountId}  created  ${out.transaction.hash}`);
+  if (wasm) {
+    const self = new Account(accountId, provider, new KeyPairSigner(keyPair));
+    const d = await self.signAndSendTransaction({
+      receiverId: accountId,
+      actions: [actions.deployContract(wasm), actions.functionCall('new', init, 300n * TGAS, 0n)],
+      waitUntil: 'FINAL',
+    });
+    console.log(`  ${accountId}  deployed + new  ${d.transaction.hash}`);
+  }
   return out;
 }
 

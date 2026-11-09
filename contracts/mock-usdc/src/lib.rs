@@ -34,7 +34,10 @@ pub struct Contract {
 
 #[near]
 impl Contract {
+    /// Only the token account itself may initialise (deploy and `new` in
+    /// one batch), so nobody can claim the mint role on fresh code.
     #[init]
+    #[private]
     pub fn new(owner: AccountId) -> Self {
         let mut token = FungibleToken::new(StorageKey::FungibleToken);
         token.internal_register_account(&owner);

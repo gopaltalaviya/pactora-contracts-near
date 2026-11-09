@@ -21,12 +21,12 @@
 
 use near_contract_standards::fungible_token::core::ext_ft_core;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
-use near_sdk::borsh::BorshSerialize;
+use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::U128;
 use near_sdk::store::LookupMap;
 use near_sdk::{
     assert_one_yocto, env, near, require, AccountId, BorshStorageKey, Gas, NearToken,
-    PanicOnDefault, Promise, PromiseOrValue,
+    PanicOnDefault, Promise, PromiseError, PromiseOrValue,
 };
 
 pub mod budget;
@@ -34,6 +34,8 @@ pub mod errors;
 pub mod events;
 pub mod types;
 
+#[cfg(test)]
+mod fuzz;
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +48,17 @@ const GAS_ON_SEND: Gas = Gas::from_tgas(10);
 /// Gas a sending method must still have left: the transfer, the callback,
 /// and 10 Tgas for promise creation and the rest of the call.
 const GAS_SEND_MIN: Gas = Gas::from_tgas(30);
+/// `recover_surplus`: the token's `ft_balance_of`, then our callback, which
+/// itself starts a send (so it needs `GAS_SEND_MIN` left after its own work).
+const GAS_FT_BALANCE_OF: Gas = Gas::from_tgas(5);
+const GAS_ON_SURPLUS: Gas = Gas::from_tgas(50);
+const GAS_RECOVER_MIN: Gas = Gas::from_tgas(70);
+/// Layout of the state blob (`STATE`); bumped with `migrate`.
+const STATE_VERSION: u8 = 1;
+/// Where near-sdk keeps the contract state.
+const STATE_KEY: &[u8] = b"STATE";
+/// `dispute_grace` given to a state migrated from the layout before 1.1.0.
+const DEFAULT_DISPUTE_GRACE: u64 = 24 * HOUR;
 const MAX_CARD_URI: usize = 512;
 /// Bytes a job may still grow by after creation (result hash, review hash,
 /// outcome), reserved and billed to the client up front so no later call by
@@ -68,6 +81,8 @@ enum StorageKey {
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
+    /// `STATE_VERSION` of this layout; `migrate` moves older ones forward.
+    version: u8,
     owner: AccountId,
     pending_owner: Option<AccountId>,
     arbiter: AccountId,
@@ -121,7 +136,11 @@ fn bps_of(amount: u128, bps: u16) -> u128 {
 impl Contract {
     // ═══════════════════════════ setup and roles ═══════════════════════════
 
+    /// Only the contract account itself may initialise: deploy and `new` go
+    /// in one batch signed by that account, so nobody can call `new` on
+    /// freshly deployed code with roles of their choosing.
     #[init]
+    #[private]
     pub fn new(
         owner: AccountId,
         token: AccountId,
@@ -132,6 +151,7 @@ impl Contract {
     ) -> Self {
         Self::check_params(&params);
         Self {
+            version: STATE_VERSION,
             owner,
             pending_owner: None,
             arbiter,
@@ -151,6 +171,62 @@ impl Contract {
             worker_records: LookupMap::new(StorageKey::WorkerRecords),
             client_records: LookupMap::new(StorageKey::ClientRecords),
             totals: Totals::default(),
+        }
+    }
+
+    /// Move the state written by the previous code (1.0.0: no `version`, no
+    /// `dispute_grace`) to this layout. Called by the contract account in
+    /// the same batch as the redeploy. Reading the old layout fails on a
+    /// state already migrated, so it cannot run twice. The maps are keyed
+    /// by prefix and are untouched.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let bytes =
+            env::storage_read(STATE_KEY).unwrap_or_else(|| env::panic_str(migration::NOT_V0));
+        let old = migration::V0::try_from_slice(&bytes)
+            .unwrap_or_else(|_| env::panic_str(migration::NOT_V0));
+        let p = old.params;
+        Self {
+            version: STATE_VERSION,
+            owner: old.owner,
+            pending_owner: old.pending_owner,
+            arbiter: old.arbiter,
+            pauser: old.pauser,
+            fee_recipient: old.fee_recipient,
+            token: old.token,
+            paused: old.paused,
+            params: Params {
+                protocol_fee_bps: p.protocol_fee_bps,
+                min_fee: p.min_fee,
+                min_job_amount: p.min_job_amount,
+                max_job_amount: p.max_job_amount,
+                fast_path_max: p.fast_path_max,
+                review_window: p.review_window,
+                max_accept_window: p.max_accept_window,
+                max_work_window: p.max_work_window,
+                dispute_timeout: p.dispute_timeout,
+                dispute_grace: DEFAULT_DISPUTE_GRACE,
+                bond_bps: p.bond_bps,
+                min_bond: p.min_bond,
+                dispute_bond_bps: p.dispute_bond_bps,
+                min_dispute_bond: p.min_dispute_bond,
+                min_stake: p.min_stake,
+                withdraw_delay: p.withdraw_delay,
+                default_per_task_cap: p.default_per_task_cap,
+                default_daily_cap: p.default_daily_cap,
+            },
+            next_agent_id: old.next_agent_id,
+            next_job_id: old.next_job_id,
+            agents: old.agents,
+            agent_by_wallet: old.agent_by_wallet,
+            purses: old.purses,
+            stakes: old.stakes,
+            storage_balances: old.storage_balances,
+            jobs: old.jobs,
+            worker_records: old.worker_records,
+            client_records: old.client_records,
+            totals: old.totals,
         }
     }
 
@@ -441,27 +517,74 @@ impl Contract {
     pub fn on_send(&mut self, receiver: AccountId, amount: U128, refund: Refund) -> bool {
         self.totals.in_flight -= amount.0;
         let ok = near_sdk::is_promise_success();
-        if !ok {
-            match &refund {
-                Refund::Purse(id) => {
-                    // The purse always exists: agents are never deleted.
-                    let mut purse = self.purse(*id);
-                    purse.balance += amount.0;
-                    self.purses.insert(*id, purse);
-                    self.totals.balances += amount.0;
-                }
-                Refund::Fees => self.totals.fees_owed += amount.0,
-                // Back into stake, where the owner can request it again.
-                Refund::Stake(id) => {
-                    let mut s = self.stake(*id);
-                    s.available += amount.0;
-                    self.stakes.insert(*id, s);
-                    self.totals.stakes += amount.0;
-                }
+        match (&refund, ok) {
+            // The stake left only once the payout has landed.
+            (Refund::Stake(id), true) => events::unstaked(*id, amount.0),
+            // Back into stake, where the owner can request it again.
+            (Refund::Stake(id), false) => {
+                let mut s = self.stake(*id);
+                s.available += amount.0;
+                self.stakes.insert(*id, s);
+                self.totals.stakes += amount.0;
+                events::stake_restored(*id, amount.0);
             }
+            (Refund::Purse(id), false) => {
+                // The purse always exists: agents are never deleted.
+                let mut purse = self.purse(*id);
+                purse.balance += amount.0;
+                self.purses.insert(*id, purse);
+                self.totals.balances += amount.0;
+            }
+            (Refund::Fees, false) => self.totals.fees_owed += amount.0,
+            // A surplus was never in any bucket: if it did not leave, it is
+            // still a surplus, recoverable again.
+            (Refund::Surplus, _) | (Refund::Purse(_), true) | (Refund::Fees, true) => {}
         }
         events::transfer_finished(&receiver, amount.0, &refund, ok);
         ok
+    }
+
+    /// Owner recovers tokens the contract holds beyond what it owes — a plain
+    /// `ft_transfer` into the contract, which credits nobody (see
+    /// SECURITY.md). Two steps: the token's `ft_balance_of`, then
+    /// `on_surplus_balance` sends `min(amount, balance − totals.sum)`
+    /// through the usual `in_flight` / `on_send` path. It can never reach
+    /// what the protocol owes: everything owed is in `totals`, and the
+    /// surplus is what is left above them.
+    #[payable]
+    pub fn recover_surplus(&mut self, amount: U128, receiver: Option<AccountId>) -> Promise {
+        assert_one_yocto();
+        self.only_owner();
+        require!(amount.0 > 0, ZERO_AMOUNT);
+        let left = env::prepaid_gas().saturating_sub(env::used_gas());
+        require!(left >= GAS_RECOVER_MIN, NOT_ENOUGH_GAS);
+        ext_ft_core::ext(self.token.clone())
+            .with_static_gas(GAS_FT_BALANCE_OF)
+            .ft_balance_of(env::current_account_id())
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_ON_SURPLUS)
+                    .on_surplus_balance(amount, receiver.unwrap_or(self.owner.clone())),
+            )
+    }
+
+    /// The balance was read after every transfer the contract had started
+    /// (receipts to the token execute in order), and a send keeps its amount
+    /// in `in_flight` until the token has moved it, so `balance − sum` never
+    /// overstates the surplus at the moment it is read.
+    #[private]
+    pub fn on_surplus_balance(
+        &mut self,
+        #[callback_result] balance: Result<U128, PromiseError>,
+        amount: U128,
+        receiver: AccountId,
+    ) -> Promise {
+        let balance = balance.unwrap_or_else(|_| env::panic_str(BALANCE_UNKNOWN));
+        let surplus = balance.0.saturating_sub(self.totals.sum());
+        let send = amount.0.min(surplus);
+        require!(send > 0, NO_SURPLUS);
+        events::surplus_recovered(&receiver, send, surplus);
+        self.send(receiver, send, Refund::Surplus)
     }
 
     // ═══════════════════════════ stake ═══════════════════════════
@@ -511,7 +634,7 @@ impl Contract {
         s.unlock_at = 0;
         self.stakes.insert(agent_id, s);
         self.totals.stakes -= amount;
-        events::unstaked(agent_id, amount);
+        // `unstaked` is emitted by `on_send`, once the payout has landed.
         self.send(agent.owner, amount, Refund::Stake(agent_id))
     }
 
@@ -532,7 +655,7 @@ impl Contract {
         let amount = amount.0;
         self.validate_hire(client_id, worker_id, amount);
         require!(amount <= self.params.max_job_amount.0, AMOUNT_ABOVE_MAXIMUM);
-        require!(accept_window > 0 && work_window > 0, WINDOW_TOO_LONG);
+        require!(accept_window > 0 && work_window > 0, INVALID_WINDOW);
         require!(
             accept_window <= self.params.max_accept_window
                 && work_window <= self.params.max_work_window,
@@ -645,7 +768,10 @@ impl Contract {
     }
 
     /// Client disputes inside the review window, paying the dispute bond from
-    /// its balance under its caps.
+    /// its balance. The bond is outside the caps: it comes back unless the
+    /// dispute is ruled against, and a client that spent its whole day on
+    /// the hire must still be able to contest the result (a cap refusal
+    /// here would hand the worker an auto-approval).
     pub fn dispute(&mut self, job_id: JobId, reason_hash: Option<String>) {
         let mut job = self.job(job_id);
         self.only_wallet_of(job.client);
@@ -656,7 +782,7 @@ impl Contract {
         }
         let bond = job.dispute_bond.0;
         if bond > 0 {
-            self.spend(job.client, bond);
+            self.take(job.client, bond);
             self.totals.dispute_bonds += bond;
         }
         job.state = JobState::Disputed;
@@ -666,8 +792,10 @@ impl Contract {
         self.jobs.insert(job_id, job);
     }
 
-    /// The arbiter (a Sputnik DAO) rules. No deadline: it may rule until
-    /// someone calls `expire_dispute`.
+    /// The arbiter (a Sputnik DAO) rules. No deadline: it may rule until the
+    /// moment `expire_dispute` actually executes, which cannot be before
+    /// `dispute_deadline + dispute_grace`, so a ruling that lands late
+    /// cannot be raced by a party expiring the dispute in the same block.
     pub fn resolve_dispute(&mut self, job_id: JobId, for_worker: bool) {
         require!(env::predecessor_account_id() == self.arbiter, NOT_ARBITER);
         let mut job = self.job(job_id);
@@ -735,19 +863,32 @@ impl Contract {
         self.jobs.insert(job_id, job);
     }
 
-    /// The arbiter never ruled: the worker is paid, the client's bond comes
-    /// back, nobody is rated.
+    /// The arbiter never ruled, and the grace after the deadline has passed
+    /// too: the worker is paid the job, and the client's bond is split —
+    /// half to the worker for the wait it was put through, half back to the
+    /// client. Nobody is rated. The grace is read from the current params
+    /// (not copied into the job), so the owner can lengthen it for disputes
+    /// already open.
     pub fn expire_dispute(&mut self, job_id: JobId) {
         let mut job = self.job(job_id);
         require!(job.state == JobState::Disputed, INVALID_STATE);
-        require!(now_s() > job.dispute_deadline, DEADLINE_NOT_PASSED);
+        require!(
+            now_s() > job.dispute_deadline + self.params.dispute_grace,
+            DEADLINE_NOT_PASSED
+        );
         let bond = job.dispute_bond.0;
+        let to_worker = bond / 2;
+        let to_client = bond - to_worker;
         self.totals.dispute_bonds -= bond;
-        self.credit(job.client, bond);
-        if bond > 0 {
-            events::dispute_bond_settled(job_id, job.client, bond);
+        self.credit(job.worker, to_worker);
+        self.credit(job.client, to_client);
+        if to_worker > 0 {
+            events::dispute_bond_settled(job_id, job.worker, to_worker);
         }
-        events::dispute_expired(job_id);
+        if to_client > 0 {
+            events::dispute_bond_settled(job_id, job.client, to_client);
+        }
+        events::dispute_expired(job_id, to_worker, to_client);
         self.settle(&mut job, Outcome::Unresolved, false);
         self.jobs.insert(job_id, job);
     }
@@ -812,6 +953,11 @@ impl Contract {
     }
 
     // ═══════════════════════════ views ═══════════════════════════
+
+    /// Layout version of the stored state (`STATE_VERSION`).
+    pub fn version(&self) -> u8 {
+        self.version
+    }
 
     pub fn get_params(&self) -> Params {
         self.params.clone()
@@ -1046,6 +1192,16 @@ impl Contract {
         self.totals.balances -= amount;
     }
 
+    /// Take `amount` from the agent's balance, outside its caps: for the
+    /// dispute bond only, which is held and returned rather than spent.
+    fn take(&mut self, id: AgentId, amount: u128) {
+        let mut p = self.purse(id);
+        require!(p.balance >= amount, INSUFFICIENT_BALANCE);
+        p.balance -= amount;
+        self.purses.insert(id, p);
+        self.totals.balances -= amount;
+    }
+
     fn credit(&mut self, id: AgentId, amount: u128) {
         if amount == 0 {
             return;
@@ -1219,6 +1375,7 @@ impl Contract {
             p.max_accept_window,
             p.max_work_window,
             p.dispute_timeout,
+            p.dispute_grace,
         ] {
             require!((1..=MAX_WINDOW).contains(&w), INVALID_WINDOW);
         }
@@ -1247,5 +1404,63 @@ impl Contract {
             p.default_per_task_cap.0 <= p.default_daily_cap.0,
             INVALID_CAPS
         );
+    }
+}
+
+// ═══════════════════════════ state migration ═══════════════════════════
+
+/// The layouts `migrate` reads. Only the top-level blob changes between
+/// versions; the maps are stored under their own prefixes.
+pub mod migration {
+    use super::*;
+
+    pub const NOT_V0: &str = "StateIsNotV0";
+
+    /// `Params` as 1.0.0 stored them: no `dispute_grace`.
+    #[derive(BorshSerialize, BorshDeserialize)]
+    #[borsh(crate = "near_sdk::borsh")]
+    pub struct ParamsV0 {
+        pub protocol_fee_bps: u16,
+        pub min_fee: U128,
+        pub min_job_amount: U128,
+        pub max_job_amount: U128,
+        pub fast_path_max: U128,
+        pub review_window: u64,
+        pub max_accept_window: u64,
+        pub max_work_window: u64,
+        pub dispute_timeout: u64,
+        pub bond_bps: u16,
+        pub min_bond: U128,
+        pub dispute_bond_bps: u16,
+        pub min_dispute_bond: U128,
+        pub min_stake: U128,
+        pub withdraw_delay: u64,
+        pub default_per_task_cap: U128,
+        pub default_daily_cap: U128,
+    }
+
+    /// The contract state as 1.0.0 stored it: no `version` field.
+    #[derive(BorshSerialize, BorshDeserialize)]
+    #[borsh(crate = "near_sdk::borsh")]
+    pub struct V0 {
+        pub owner: AccountId,
+        pub pending_owner: Option<AccountId>,
+        pub arbiter: AccountId,
+        pub pauser: AccountId,
+        pub fee_recipient: AccountId,
+        pub token: AccountId,
+        pub paused: bool,
+        pub params: ParamsV0,
+        pub next_agent_id: AgentId,
+        pub next_job_id: JobId,
+        pub agents: LookupMap<AgentId, Agent>,
+        pub agent_by_wallet: LookupMap<AccountId, AgentId>,
+        pub purses: LookupMap<AgentId, Purse>,
+        pub stakes: LookupMap<AgentId, Stake>,
+        pub storage_balances: LookupMap<AgentId, u128>,
+        pub jobs: LookupMap<JobId, Job>,
+        pub worker_records: LookupMap<AgentId, WorkerRecord>,
+        pub client_records: LookupMap<AgentId, ClientRecord>,
+        pub totals: Totals,
     }
 }

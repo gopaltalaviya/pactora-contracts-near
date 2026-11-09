@@ -111,8 +111,17 @@ pub fn dispute_resolved(id: JobId, for_worker: bool, arbiter: &AccountId) {
     );
 }
 
-pub fn dispute_expired(id: JobId) {
-    emit("dispute_expired", json!({ "job_id": id }));
+/// `bond_to_worker` / `bond_to_client`: how the client's dispute bond was
+/// split (added in 1.1.0; the indexer reads `job_id` and may ignore them).
+pub fn dispute_expired(id: JobId, bond_to_worker: u128, bond_to_client: u128) {
+    emit(
+        "dispute_expired",
+        json!({
+            "job_id": id,
+            "bond_to_worker": U128(bond_to_worker),
+            "bond_to_client": U128(bond_to_client),
+        }),
+    );
 }
 
 pub fn job_settled(id: JobId, worker: AgentId, paid: u128, fee: u128, outcome: Outcome) {
@@ -192,10 +201,28 @@ pub fn unstake_cancelled(id: AgentId, amount: u128) {
     );
 }
 
+/// The matured stake reached the owner (emitted from `on_send`, on success).
 pub fn unstaked(id: AgentId, amount: u128) {
     emit(
         "unstaked",
         json!({ "agent_id": id, "amount": U128(amount) }),
+    );
+}
+
+/// The payout of matured stake failed and the amount is back in the stake.
+pub fn stake_restored(id: AgentId, amount: u128) {
+    emit(
+        "stake_restored",
+        json!({ "agent_id": id, "amount": U128(amount) }),
+    );
+}
+
+/// `recover_surplus`: `amount` of the `surplus` above `totals.sum` is being
+/// sent to `to`.
+pub fn surplus_recovered(to: &AccountId, amount: u128, surplus: u128) {
+    emit(
+        "surplus_recovered",
+        json!({ "to": to, "amount": U128(amount), "surplus": U128(surplus) }),
     );
 }
 

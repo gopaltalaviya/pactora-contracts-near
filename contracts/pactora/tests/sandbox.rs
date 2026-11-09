@@ -31,7 +31,7 @@ fn params() -> Value {
         "protocol_fee_bps": 100, "min_fee": "100", "min_job_amount": "10000",
         "max_job_amount": "10000000", "fast_path_max": "30000",
         "review_window": 600, "max_accept_window": 3000, "max_work_window": 18000,
-        "dispute_timeout": 3600, "bond_bps": 2000, "min_bond": "10000",
+        "dispute_timeout": 3600, "dispute_grace": 3600, "bond_bps": 2000, "min_bond": "10000",
         "dispute_bond_bps": 1000, "min_dispute_bond": "10000", "min_stake": "10000000",
         "withdraw_delay": 604800, "default_per_task_cap": "5000000",
         "default_daily_cap": "20000000"

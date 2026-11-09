@@ -24,10 +24,13 @@
  *   withdraw while the owner can withdraw, a stolen worker FC key refused
  *   locking a bond beyond its caps, a dispute ruled by the arbiter,
  *   every exit anyone may call (expire_unaccepted, expire_undelivered,
- *   auto_approve, expire_dispute), a PERSON (one full-access account that is
- *   both owner and wallet) registering, staking, being hired, delivering and
- *   being paid, with SameOwner refused against its own agents, and invariant I1: the contract's token
- *   balance equals the sum of what it owes (get_totals).
+ *   auto_approve, expire_dispute — refused inside the grace after the
+ *   deadline, then splitting the bond), a PERSON (one full-access account
+ *   that is both owner and wallet) registering, staking, being hired,
+ *   delivering and being paid, with SameOwner refused against its own
+ *   agents, the owner recovering a surplus left by a plain ft_transfer (and
+ *   only that), and invariant I1: the contract's token balance equals the
+ *   sum of what it owes (get_totals).
  */
 import {readFileSync, existsSync} from 'node:fs';
 import {createHash} from 'node:crypto';
@@ -342,7 +345,7 @@ const job4 = await view(contracts.Pactora, 'get_job', {job_id: j4});
 if (job4.state !== 'Refunded' || job4.outcome !== 'Failed') throw new Error(`job ${j4}: ${JSON.stringify(job4)}`);
 ok("expire_undelivered: accepted and never delivered — refunded, the worker's bond seized", `job ${j4}`);
 
-if (params.review_window <= 60) {
+if (params.review_window <= 60 && params.dispute_grace <= 60) {
   const j5 = await hire(5);
   await call(workerBot.account, contracts.Pactora, 'accept_job', {job_id: j5});
   await call(workerBot.account, contracts.Pactora, 'submit_result', {job_id: j5, result_hash: sha(`${run}:result:5`)});
@@ -354,11 +357,28 @@ if (params.review_window <= 60) {
   await call(workerBot.account, contracts.Pactora, 'accept_job', {job_id: j6});
   await call(workerBot.account, contracts.Pactora, 'submit_result', {job_id: j6, result_hash: sha(`${run}:result:6`)});
   await call(clientBot.account, contracts.Pactora, 'dispute', {job_id: j6, reason_hash: null});
-  await waitUntilChain((await view(contracts.Pactora, 'get_job', {job_id: j6})).dispute_deadline);
+  const job6 = await view(contracts.Pactora, 'get_job', {job_id: j6});
+  await waitUntilChain(job6.dispute_deadline);
+  // Inside the grace the arbiter may still rule, and nobody may expire the dispute.
+  await refused(
+    call(anyone, contracts.Pactora, 'expire_dispute', {job_id: j6}),
+    'DeadlineNotPassed',
+    `expire_dispute inside the ${params.dispute_grace} s grace after the dispute deadline`,
+  );
+  const w6 = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: B.id})).balance);
+  const c6 = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: A.id})).balance);
+  await waitUntilChain(job6.dispute_deadline + params.dispute_grace);
   await call(anyone, contracts.Pactora, 'expire_dispute', {job_id: j6});
-  ok('expire_dispute: a dispute nobody rules on pays the worker and returns the bond', `job ${j6}`);
+  const bond6 = BigInt(job6.dispute_bond);
+  const half = bond6 / 2n;
+  const wGot = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: B.id})).balance) - w6;
+  const cGot = BigInt((await view(contracts.Pactora, 'purse_of', {agent_id: A.id})).balance) - c6;
+  if (wGot !== 50000n - BigInt(job6.fee) + half || cGot !== bond6 - half) {
+    throw new Error(`job ${j6} expired: worker +${wGot}, client +${cGot}, bond ${bond6}, fee ${job6.fee}`);
+  }
+  ok(`expire_dispute: a dispute nobody rules on pays the worker the job and half the ${bond6} bond (${half}); the other ${bond6 - half} returns to the client`, `job ${j6}`);
 } else {
-  console.log(`  - auto_approve / expire_dispute skipped: the review window is ${params.review_window} s here (sandbox uses 10 s)`);
+  console.log(`  - auto_approve / expire_dispute skipped: the review window is ${params.review_window} s and the dispute grace ${params.dispute_grace} s here (sandbox uses 10 s)`);
 }
 
 // ── a PERSON takes part: no wallet split, no contract change ─────────────
@@ -410,6 +430,19 @@ await refused(
   'SameOwner',
   "the person's second agent hiring the person's first agent (same owner, different wallets)",
 );
+
+// ── surplus: a plain ft_transfer credits nobody; only the owner, only the surplus ──
+await call(client.account, contracts.PaymentToken, 'ft_transfer', {receiver_id: contracts.Pactora, amount: '777'}, {deposit: 1n});
+await refused(
+  call(client.account, contracts.Pactora, 'recover_surplus', {amount: '777', receiver: client.id}, {deposit: 1n}),
+  'NotOwner',
+  'a non-owner recovering the surplus',
+);
+const clientTokBefore = BigInt(await view(contracts.PaymentToken, 'ft_balance_of', {account_id: client.id}));
+const recovered = await call(root, contracts.Pactora, 'recover_surplus', {amount: '1000000', receiver: client.id}, {deposit: 1n, gas: 150n * TGAS});
+const clientTokAfter = BigInt(await view(contracts.PaymentToken, 'ft_balance_of', {account_id: client.id}));
+if (clientTokAfter - clientTokBefore !== 777n) throw new Error(`recover_surplus moved ${clientTokAfter - clientTokBefore}, expected the 777 surplus`);
+ok('recover_surplus: the owner asked for 1000000 and got exactly the 777 a plain ft_transfer had left above the totals', link(recovered.hash));
 
 // ── I1 ───────────────────────────────────────────────────────────────────
 const totals = await view(contracts.Pactora, 'get_totals');

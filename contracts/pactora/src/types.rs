@@ -61,7 +61,13 @@ pub struct Params {
     pub review_window: u64,
     pub max_accept_window: u64,
     pub max_work_window: u64,
+    /// How long the arbiter has to rule before a dispute may be expired...
     pub dispute_timeout: u64,
+    /// ...plus this: `expire_dispute` works only after
+    /// `dispute_deadline + dispute_grace`, and the arbiter may rule until
+    /// then (and after, until someone actually expires it). Read from the
+    /// current params at expiry, not copied into the job.
+    pub dispute_grace: u64,
     pub bond_bps: u16,
     pub min_bond: U128,
     pub dispute_bond_bps: u16,
@@ -213,6 +219,8 @@ pub enum Refund {
     Purse(AgentId),
     Fees,
     Stake(AgentId),
+    /// `recover_surplus`: nothing to restore, the amount was in no bucket.
+    Surplus,
 }
 
 // ─────────────────────────── views ───────────────────────────

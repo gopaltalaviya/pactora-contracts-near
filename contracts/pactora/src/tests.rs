@@ -32,6 +32,7 @@ fn params() -> Params {
         max_accept_window: 3_000,
         max_work_window: 18_000,
         dispute_timeout: 3_600,
+        dispute_grace: 86_400,
         bond_bps: 2_000,
         min_bond: U128(10_000),
         dispute_bond_bps: 1_000,
@@ -352,7 +353,7 @@ fn amount_and_window_limits() {
     expect_panic("AmountAboveMaximum", || {
         h.c.create_job(client, worker, U128(10_000_001), SPEC.into(), 300, 1_800);
     });
-    expect_panic("WindowTooLong", || {
+    expect_panic("InvalidWindow", || {
         h.c.create_job(client, worker, U128(100_000), SPEC.into(), 0, 1_800);
     });
     expect_panic("WindowTooLong", || {
@@ -602,20 +603,6 @@ fn ruling_for_the_client_refunds_it_and_releases_the_worker_bond() {
     );
     assert_eq!(h.c.worker_record(worker).unwrap().disputes_lost, 1);
     assert_eq!(h.c.verdict_of(id), Some(0));
-    h.check_i1();
-}
-
-#[test]
-fn an_unanswered_dispute_expires_paying_the_worker_and_returning_the_bond() {
-    let (mut h, client, worker) = market();
-    let id = disputed(&mut h, client, worker);
-    h.advance(3_601);
-    h.as_("anyone.test");
-    h.c.expire_dispute(id);
-    assert_eq!(h.balance(worker), 990_000);
-    assert_eq!(h.balance(client), 9_000_000);
-    let r = h.c.worker_record(worker).unwrap();
-    assert_eq!((r.unresolved, r.reviews), (1, 0), "nobody is rated");
     h.check_i1();
 }
 
@@ -1007,7 +994,7 @@ fn verdicts_are_given_only_for_attributable_endings() {
     assert_eq!(h.c.verdict_of(direct), None);
     // A dispute that expires: settled, but not attributable.
     let id = disputed(&mut h, client, worker);
-    h.advance(3_601);
+    h.advance(3_600 + 86_400 + 1);
     h.as_("anyone.test");
     h.c.expire_dispute(id);
     assert_eq!(h.c.verdict_of(id), None);
@@ -1062,6 +1049,9 @@ fn params_are_bounded() {
     expect_panic("FeeTooHigh", || h.c.set_params(p.clone()));
     let mut p = params();
     p.review_window = 0;
+    expect_panic("InvalidWindow", || h.c.set_params(p.clone()));
+    let mut p = params();
+    p.dispute_grace = 0;
     expect_panic("InvalidWindow", || h.c.set_params(p.clone()));
     let mut p = params();
     p.min_fee = U128(10_000);
@@ -1303,5 +1293,425 @@ mod invariants {
                 check(&h, &jobs, worker);
             }
         }
+    }
+}
+
+// ─────────────────────────── audit fixes (2026-11-09) ───────────────────────────
+// Each test here was run against the code before its fix and failed.
+
+mod audit {
+    use super::*;
+    use crate::migration;
+
+    const GRACE: u64 = 86_400;
+
+    fn logs() -> Vec<String> {
+        near_sdk::test_utils::get_logs()
+    }
+
+    /// The arbiter may rule until the expiry actually executes, and nobody may
+    /// expire a dispute inside the grace after its deadline — so a late
+    /// ruling can no longer be raced by the worker calling `expire_dispute`
+    /// in the same block.
+    #[test]
+    fn a_ruling_after_the_deadline_wins_and_expiry_waits_out_the_grace() {
+        let (mut h, client, worker) = market();
+        let ruled = disputed(&mut h, client, worker);
+        let expired = disputed(&mut h, client, worker);
+        let deadline = h.job(ruled).dispute_deadline;
+        h.now = deadline + 1;
+
+        h.as_("anyone.test");
+        expect_panic("DeadlineNotPassed", || h.c.expire_dispute(expired));
+        h.as_("dao.test");
+        h.c.resolve_dispute(ruled, false);
+        assert_eq!(h.job(ruled).state, JobState::Refunded);
+
+        h.now = deadline + GRACE;
+        h.as_("anyone.test");
+        expect_panic("DeadlineNotPassed", || h.c.expire_dispute(expired));
+        h.now = deadline + GRACE + 1;
+        // Still rulable right up to the moment someone expires it.
+        let late = disputed(&mut h, client, worker);
+        h.as_("dao.test");
+        h.c.resolve_dispute(expired, true);
+        assert_eq!(h.job(expired).state, JobState::Settled);
+        h.now = h.job(late).dispute_deadline + GRACE + 1;
+        h.as_("anyone.test");
+        h.c.expire_dispute(late);
+        assert_eq!(h.job(late).outcome, Some(Outcome::Unresolved));
+        h.as_("dao.test");
+        expect_panic("InvalidState", || h.c.resolve_dispute(late, false));
+        h.check_i1();
+    }
+
+    /// The dispute bond is refunded unless the dispute is ruled against, so
+    /// it checks only the balance, never the per-task or daily caps: a client
+    /// that spent its whole day on the hire can still dispute the result.
+    #[test]
+    fn a_client_at_its_daily_cap_can_still_dispute() {
+        let (mut h, client, worker) = market();
+        h.as_yocto("alice.test");
+        h.c.set_caps(client, U128(1_000_000), U128(1_000_000));
+        let id = create(&mut h, client, worker, 1_000_000);
+        h.as_("w.bob.test");
+        h.c.accept_job(id);
+        h.c.submit_result(id, RESULT.into());
+        h.as_("c.alice.test");
+        h.c.dispute(id, None);
+        assert_eq!(h.job(id).state, JobState::Disputed);
+        assert_eq!(h.balance(client), 10_000_000 - 1_000_000 - 100_000);
+        assert_eq!(h.c.get_totals().dispute_bonds.0, 100_000);
+        // The bond did not count toward the window either.
+        assert_eq!(h.c.purse_of(client).unwrap().spent_today.0, 1_000_000);
+        h.check_i1();
+    }
+
+    /// The balance is still the floor for the bond.
+    #[test]
+    fn a_dispute_bond_above_the_balance_is_refused() {
+        let (mut h, client, worker) = market();
+        let id = create(&mut h, client, worker, 1_000_000);
+        h.as_("w.bob.test");
+        h.c.accept_job(id);
+        h.c.submit_result(id, RESULT.into());
+        h.as_yocto("alice.test");
+        let _ = h.c.withdraw(client, U128(8_950_000), None);
+        h.finish_send(true, "alice.test", 8_950_000, Refund::Purse(client));
+        h.as_("c.alice.test");
+        expect_panic("InsufficientBalance", || h.c.dispute(id, None));
+        h.check_i1();
+    }
+
+    /// An arbiter that never rules costs the client half its bond: the worker
+    /// waited through the review window and the dispute for nothing, and is
+    /// paid the job plus that half. Nobody is rated.
+    #[test]
+    fn an_unanswered_dispute_splits_the_bond_between_worker_and_client() {
+        let (mut h, client, worker) = market();
+        let id = disputed(&mut h, client, worker);
+        h.now = h.job(id).dispute_deadline + GRACE + 1;
+        h.as_("anyone.test");
+        h.c.expire_dispute(id);
+        assert_eq!(
+            h.balance(worker),
+            990_000 + 50_000,
+            "the job and half the bond"
+        );
+        assert_eq!(
+            h.balance(client),
+            10_000_000 - 1_000_000 - 100_000 + 50_000,
+            "half the bond back"
+        );
+        assert_eq!(h.c.get_totals().dispute_bonds.0, 0);
+        let r = h.c.worker_record(worker).unwrap();
+        assert_eq!(
+            (r.unresolved, r.completed, r.reviews),
+            (1, 0, 0),
+            "nobody is rated"
+        );
+        assert_eq!(h.c.client_record(client).unwrap().reviews, 0);
+        let l = logs();
+        let expired = l
+            .iter()
+            .find(|l| l.contains("\"dispute_expired\""))
+            .expect("dispute_expired");
+        assert!(
+            expired.contains(r#""bond_to_worker":"50000""#)
+                && expired.contains(r#""bond_to_client":"50000""#),
+            "{expired}"
+        );
+        assert_eq!(
+            l.iter()
+                .filter(|l| l.contains("dispute_bond_settled"))
+                .count(),
+            2
+        );
+        h.check_i1();
+    }
+
+    /// A zero window is an invalid window, not a window that is too long.
+    #[test]
+    fn a_zero_window_is_an_invalid_window() {
+        let (mut h, client, worker) = market();
+        h.as_("c.alice.test");
+        expect_panic("InvalidWindow", || {
+            h.c.create_job(client, worker, U128(100_000), SPEC.into(), 0, 1_800);
+        });
+        expect_panic("InvalidWindow", || {
+            h.c.create_job(client, worker, U128(100_000), SPEC.into(), 300, 0);
+        });
+    }
+
+    /// `unstaked` is emitted when the payout lands, not when it is attempted;
+    /// a payout that fails emits `stake_restored` instead.
+    #[test]
+    fn unstaked_is_emitted_only_when_the_payout_lands() {
+        let (mut h, _, worker) = market();
+        h.as_yocto("bob.test");
+        h.c.request_unstake(worker, U128(5_000_000));
+        h.advance(604_800);
+        h.as_yocto("bob.test");
+        let _ = h.c.complete_unstake(worker);
+        assert!(
+            !logs().iter().any(|l| l.contains("\"unstaked\"")),
+            "{:?}",
+            logs()
+        );
+        h.finish_send(false, "bob.test", 5_000_000, Refund::Stake(worker));
+        let l = logs();
+        assert!(l.iter().any(|l| l.contains("\"stake_restored\"")), "{l:?}");
+        assert!(!l.iter().any(|l| l.contains("\"unstaked\"")), "{l:?}");
+        assert_eq!(h.c.stake_of(worker).unwrap().available.0, 20_000_000);
+
+        h.as_yocto("bob.test");
+        h.c.request_unstake(worker, U128(5_000_000));
+        h.advance(604_800);
+        h.as_yocto("bob.test");
+        let _ = h.c.complete_unstake(worker);
+        h.finish_send(true, "bob.test", 5_000_000, Refund::Stake(worker));
+        let l = logs();
+        assert!(
+            l.iter()
+                .any(|l| l.contains("\"unstaked\"") && l.contains("\"5000000\"")),
+            "{l:?}"
+        );
+        assert!(!l.iter().any(|l| l.contains("\"stake_restored\"")), "{l:?}");
+        h.check_i1();
+    }
+
+    fn testnet_params() -> Params {
+        Params {
+            default_per_task_cap: U128(100_000),
+            default_daily_cap: U128(1_000_000),
+            ..params()
+        }
+    }
+
+    /// Known limit (audit A2): a leaked client key, which cannot withdraw,
+    /// can still burn the agent's prepaid storage NEAR with create/cancel
+    /// loops. Each cycle costs the same, the tokens all come back, and the
+    /// loop ends when the prepaid storage is gone — the owner's
+    /// `freeze_agent` ends it sooner.
+    #[test]
+    fn a_leaked_client_key_can_only_burn_the_prepaid_storage() {
+        let (mut h, client, worker) = market();
+        let before = h.c.storage_balance_of(client).0;
+        let mut costs = vec![];
+        for _ in 0..20 {
+            let b0 = h.c.storage_balance_of(client).0;
+            h.as_("c.alice.test");
+            let id =
+                h.c.create_job(client, worker, U128(10_000), SPEC.into(), 300, 1_800);
+            h.c.cancel(id);
+            costs.push(b0 - h.c.storage_balance_of(client).0);
+        }
+        assert!(costs.iter().all(|c| *c > 0 && *c == costs[0]), "{costs:?}");
+        assert_eq!(h.balance(client), 10_000_000, "every token came back");
+        assert_eq!(before - h.c.storage_balance_of(client).0, 20 * costs[0]);
+        // Frozen, the key can do nothing more.
+        h.as_("alice.test");
+        h.c.freeze_agent(client);
+        h.as_("c.alice.test");
+        expect_panic("AgentFrozen", || {
+            h.c.create_job(client, worker, U128(10_000), SPEC.into(), 300, 1_800);
+        });
+        h.check_i1();
+    }
+
+    /// Known limit (audit A3): with the testnet default caps (per-task
+    /// 100_000) a worker cannot accept a job above 500_000, since its 20%
+    /// bond counts toward its own caps, although `create_job` allows up to
+    /// `max_job_amount`. The owner raises the worker's caps with `set_caps`.
+    #[test]
+    fn default_caps_bound_the_bond_a_worker_can_lock() {
+        let mut h = H::new();
+        h.as_yocto("owner.test");
+        h.c.set_params(testnet_params());
+        let client = h.agent("alice.test", "c.alice.test");
+        let worker = h.agent("bob.test", "w.bob.test");
+        h.fund(client, 10_000_000);
+        h.stake(worker, 20_000_000);
+        h.as_yocto("alice.test");
+        h.c.set_caps(client, U128(10_000_000), U128(10_000_000));
+        let big = create(&mut h, client, worker, 1_000_000);
+        h.as_("w.bob.test");
+        expect_panic("PerTaskCapExceeded", || h.c.accept_job(big));
+        let fits = create(&mut h, client, worker, 500_000);
+        h.as_("w.bob.test");
+        h.c.accept_job(fits);
+        h.as_yocto("bob.test");
+        h.c.set_caps(worker, U128(1_000_000), U128(1_000_000));
+        h.as_("w.bob.test");
+        h.c.accept_job(big);
+        h.check_i1();
+    }
+
+    /// `recover_surplus` reaches only what lies above the totals — tokens a
+    /// plain `ft_transfer` left in the contract — never what is owed.
+    #[test]
+    fn recover_surplus_takes_only_what_lies_above_the_totals() {
+        let (mut h, _, _) = market();
+        // A plain ft_transfer into the contract: held, credited to nobody.
+        h.held += 777;
+        h.as_yocto("alice.test");
+        expect_panic("NotOwner", || {
+            let _ = h.c.recover_surplus(U128(1), None);
+        });
+        h.as_("owner.test");
+        expect_panic("Requires attached deposit of exactly 1 yoctoNEAR", || {
+            let _ = h.c.recover_surplus(U128(1), None);
+        });
+        h.as_yocto("owner.test");
+        let _ = h.c.recover_surplus(U128(1_000), None);
+        let sum = h.c.get_totals().sum.0;
+        assert_eq!(h.held, sum + 777);
+
+        // The token answers with the real balance: only the 777 move.
+        h.as_(CONTRACT);
+        let _ =
+            h.c.on_surplus_balance(Ok(U128(h.held)), U128(1_000), acc("owner.test"));
+        assert_eq!(h.c.get_totals().in_flight.0, 777);
+        assert!(logs()
+            .iter()
+            .any(|l| l.contains("\"surplus_recovered\"") && l.contains("\"777\"")));
+        h.finish_send(true, "owner.test", 777, Refund::Surplus);
+        assert_eq!(h.c.get_totals().sum.0, sum, "no bucket changed");
+        h.check_i1();
+
+        // Nothing above the totals now: refused, nothing moves.
+        h.as_(CONTRACT);
+        expect_panic("NoSurplus", || {
+            let _ =
+                h.c.on_surplus_balance(Ok(U128(h.held)), U128(1), acc("owner.test"));
+        });
+        expect_panic("BalanceUnknown", || {
+            let _ = h.c.on_surplus_balance(
+                Err(near_sdk::PromiseError::Failed),
+                U128(1),
+                acc("owner.test"),
+            );
+        });
+        assert_eq!(h.c.get_totals().in_flight.0, 0);
+
+        // A failed payout leaves the surplus where it was, still recoverable.
+        h.held += 10;
+        h.as_(CONTRACT);
+        let _ =
+            h.c.on_surplus_balance(Ok(U128(h.held)), U128(1_000), acc("owner.test"));
+        assert_eq!(h.c.get_totals().in_flight.0, 10);
+        h.finish_send(false, "owner.test", 10, Refund::Surplus);
+        assert_eq!(h.c.get_totals().sum.0, sum);
+        assert_eq!(h.held, sum + 10);
+    }
+
+    /// The state the 1.0.0 code left (no `version`, no `dispute_grace`)
+    /// migrates to this layout with every view unchanged, and cannot be
+    /// migrated twice.
+    #[test]
+    fn migrate_reads_the_1_0_0_layout_and_keeps_every_view() {
+        let (mut h, client, worker) = market();
+        let disputed_job = disputed(&mut h, client, worker);
+        let open = create(&mut h, client, worker, 100_000);
+        h.as_yocto("bob.test");
+        h.c.request_unstake(worker, U128(1_000_000));
+        h.as_("anyone.test");
+        let views = |c: &Contract| {
+            vec![
+                format!("{:?}", c.get_roles()),
+                format!("{:?}", c.get_agent(client)),
+                format!("{:?}", c.get_agent(worker)),
+                format!("{:?}", c.get_job(disputed_job)),
+                format!("{:?}", c.get_job(open)),
+                format!("{:?}", c.purse_of(client)),
+                format!("{:?}", c.purse_of(worker)),
+                format!("{:?}", c.stake_of(worker)),
+                format!("{:?}", c.get_totals()),
+                format!("{:?}", c.worker_record(worker)),
+                format!("{:?}", c.client_record(client)),
+                format!("{:?}", c.agent_count()),
+                format!("{:?}", c.job_count()),
+                format!("{:?}", c.storage_balance_of(client)),
+                format!("{:?}", c.agent_of_wallet(acc("c.alice.test"))),
+                format!("{:?}", c.verdict_of(disputed_job)),
+                format!("{:?}", c.is_hireable(worker)),
+            ]
+        };
+        let before = views(&h.c);
+        let params_before = h.c.get_params();
+
+        // What 1.0.0 would have written under STATE for this very state.
+        h.c.flush();
+        let p = &h.c.params;
+        let v0 = migration::V0 {
+            owner: h.c.owner.clone(),
+            pending_owner: h.c.pending_owner.clone(),
+            arbiter: h.c.arbiter.clone(),
+            pauser: h.c.pauser.clone(),
+            fee_recipient: h.c.fee_recipient.clone(),
+            token: h.c.token.clone(),
+            paused: h.c.paused,
+            params: migration::ParamsV0 {
+                protocol_fee_bps: p.protocol_fee_bps,
+                min_fee: p.min_fee,
+                min_job_amount: p.min_job_amount,
+                max_job_amount: p.max_job_amount,
+                fast_path_max: p.fast_path_max,
+                review_window: p.review_window,
+                max_accept_window: p.max_accept_window,
+                max_work_window: p.max_work_window,
+                dispute_timeout: p.dispute_timeout,
+                bond_bps: p.bond_bps,
+                min_bond: p.min_bond,
+                dispute_bond_bps: p.dispute_bond_bps,
+                min_dispute_bond: p.min_dispute_bond,
+                min_stake: p.min_stake,
+                withdraw_delay: p.withdraw_delay,
+                default_per_task_cap: p.default_per_task_cap,
+                default_daily_cap: p.default_daily_cap,
+            },
+            next_agent_id: h.c.next_agent_id,
+            next_job_id: h.c.next_job_id,
+            agents: near_sdk::store::LookupMap::new(crate::StorageKey::Agents),
+            agent_by_wallet: near_sdk::store::LookupMap::new(crate::StorageKey::AgentByWallet),
+            purses: near_sdk::store::LookupMap::new(crate::StorageKey::Purses),
+            stakes: near_sdk::store::LookupMap::new(crate::StorageKey::Stakes),
+            storage_balances: near_sdk::store::LookupMap::new(crate::StorageKey::StorageBalances),
+            jobs: near_sdk::store::LookupMap::new(crate::StorageKey::Jobs),
+            worker_records: near_sdk::store::LookupMap::new(crate::StorageKey::WorkerRecords),
+            client_records: near_sdk::store::LookupMap::new(crate::StorageKey::ClientRecords),
+            totals: h.c.totals.clone(),
+        };
+        near_sdk::env::state_write(&v0);
+        let old_bytes = near_sdk::borsh::to_vec(&v0).unwrap();
+        let new_bytes = near_sdk::borsh::to_vec(&h.c).unwrap();
+        assert_ne!(old_bytes, new_bytes, "the layouts differ");
+        assert!(
+            <Contract as near_sdk::borsh::BorshDeserialize>::try_from_slice(&old_bytes).is_err(),
+            "the new code cannot read 1.0.0 state as is"
+        );
+
+        ctx(CONTRACT, 0, h.now);
+        let migrated = Contract::migrate();
+        assert_eq!(migrated.version(), 1);
+        assert_eq!(views(&migrated), before, "every view reads the same");
+        let mut want = params_before.clone();
+        want.dispute_grace = 86_400;
+        assert_eq!(
+            migrated.get_params(),
+            want,
+            "dispute_grace gets its default"
+        );
+        assert_eq!(migrated.params.dispute_grace, crate::DEFAULT_DISPUTE_GRACE);
+
+        // A second migration finds no 1.0.0 state and changes nothing.
+        near_sdk::env::state_write(&migrated);
+        expect_panic("StateIsNotV0", || {
+            let _ = Contract::migrate();
+        });
+        let again: Contract = near_sdk::env::state_read().unwrap();
+        assert_eq!(views(&again), before);
+        std::mem::forget(migrated);
+        std::mem::forget(again);
     }
 }

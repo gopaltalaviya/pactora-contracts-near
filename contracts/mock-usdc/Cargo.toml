@@ -17,7 +17,11 @@ crate-type = ["cdylib", "rlib"]
 image = "sourcescan/cargo-near:0.22.0-rust-1.99.1"
 image_digest = "sha256:c9655eaf7436b90c87ea8b25739f91063032c5c30ba24cfeafe72c142943b5bb"
 passed_env = []
-container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked"]
+# --no-wasmopt: cargo-near's wasm-opt post-step segfaulted on this contract in
+# this very image too, 2 runs of 2 (2026-11-09, after `new` became
+# `#[private]`; pactora's note dates from 2026-11-05). Same determinism, a
+# larger wasm, no change in behaviour: wasm-opt only optimises for size.
+container_build_command = ["cargo", "near", "build", "non-reproducible-wasm", "--locked", "--no-wasmopt"]
 
 [dependencies]
 near-sdk = { workspace = true }

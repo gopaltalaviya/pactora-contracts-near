@@ -71,23 +71,39 @@ jobs:
           if-no-files-found: error
 
   sandbox:
-    name: sandbox integration tests (the CI-built wasm)
+    name: sandbox + adversarial tests (the CI-built wasm)
     needs: wasm
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: actions/download-artifact@v8
         with:
           name: wasm
           path: wasm
+      - run: npm ci
+      # The Sputnik DAO code testnet's factory deploys, for the real-DAO adversarial test.
+      - name: Fetch the Sputnik DAO wasm (hash-checked)
+        run: node scripts/create-dao.mjs --fetch-wasm "$RUNNER_TEMP/sputnik-dao.wasm"
       # The exact bytes the wasm job built and that get deployed — not a
-      # second build from source (tests/sandbox.rs reads these when set).
+      # second build from source (the tests read these when set).
+      # OLD_PACTORA_WASM is the previous release, committed, for the
+      # upgrade + migrate test.
       - name: Sandbox tests (local NEAR node)
         env:
           PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
           MOCK_USDC_WASM: ${{ github.workspace }}/wasm/mock_usdc/mock_usdc.wasm
         run: cargo test -p pactora --test sandbox -- --test-threads=2
+      - name: Adversarial tests (races, gas sweeps, a real DAO, an upgrade over live state)
+        env:
+          PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
+          MOCK_USDC_WASM: ${{ github.workspace }}/wasm/mock_usdc/mock_usdc.wasm
+          OLD_PACTORA_WASM: ${{ github.workspace }}/wasm/previous/pactora.wasm
+          SPUTNIK_DAO_WASM: ${{ runner.temp }}/sputnik-dao.wasm
+        run: cargo test -p pactora --test adversarial -- --test-threads=2
 
   live:
     name: deploy + verify-near on a fresh near-sandbox
@@ -112,7 +128,7 @@ jobs:
           (npx near-sandbox --home "$RUNNER_TEMP/sbx/home" run > "$RUNNER_TEMP/sbx/node.log" 2>&1 &)
           for i in $(seq 1 60); do curl -fs http://127.0.0.1:3030/status >/dev/null && break; sleep 2; done
           curl -fs http://127.0.0.1:3030/status | head -c 300
-      - name: Deploy, then every flow live (17 checks), then again with the DAO arbiter (19)
+      - name: Deploy, then every flow live (26 checks), then again with the DAO arbiter (28)
         env:
           SANDBOX_KEY_FILE: ${{ runner.temp }}/sbx/home/validator_key.json
           PACTORA_WASM: ${{ github.workspace }}/wasm/pactora/pactora.wasm
