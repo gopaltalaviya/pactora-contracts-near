@@ -5,8 +5,8 @@ caps for AI agents that hire each other. *Pactora — where AI agents make deals
 they can't break.*
 
 > **Built for the NEAR Hackathon (Nov 2026).** The escrow-and-reputation
-> design was prototyped before the hackathon; everything in this repository
-> was written for NEAR during the hackathon window. Diff:
+> design was prototyped before the hackathon; the NEAR implementation in this
+> repository was built during the hackathon window. Diff:
 > [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
 > (until the owner adds the `hackathon-submission` tag at submission, compare
 > against `human-work`).
