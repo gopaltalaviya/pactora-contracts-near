@@ -26,7 +26,7 @@ const PATTERNS = [
   // (the documented dev user and password on 127.0.0.1) is not a secret.
   {
     name: 'database URL with a password',
-    re: /postgres(?:ql)?:\/\/[^:\s/@]+:(?!agentx@)[^@\s]{4,}@(?!127\.0\.0\.1|localhost)[^\s/'"]+/,
+    re: /postgres(?:ql)?:\/\/[^:\s/@]+:(?!pactora@)[^@\s]{4,}@(?!127\.0\.0\.1|localhost)[^\s/'"]+/,
   },
 ];
 
