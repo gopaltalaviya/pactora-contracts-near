@@ -138,12 +138,16 @@ hash-checked Sputnik DAO wasm fetched from testnet; `deploy.mjs` +
 
 ## Run it live on a local NEAR node
 
-Do this, see that (Docker; `npm ci` first):
+Do this, see that (Docker; `npm ci` first; clone with `-b human-work`, the
+submission branch). A POSIX shell (Linux, macOS, WSL); on Git Bash for
+Windows prefix the `docker run` with `MSYS_NO_PATHCONV=1` and use
+`$(pwd -W)` for `$PWD`, or the volume mounts the wrong folder. Port 3031
+keeps clear of the backend demo's sandbox on 3030:
 
 ```sh
 docker build -t pactora-near-sandbox ../pactora-backend-near/deploy/near-sandbox
-docker run -d --name pactora-sbx -p 127.0.0.1:3030:3030 -v "$PWD/.sbx:/data" pactora-near-sandbox
-export SANDBOX_KEY_FILE=$PWD/.sbx/validator_key.json
+docker run -d --name pactora-sbx -p 127.0.0.1:3031:3030 -v "$PWD/.sbx:/data" pactora-near-sandbox
+export SANDBOX_KEY_FILE=$PWD/.sbx/validator_key.json SANDBOX_RPC=http://127.0.0.1:3031
 node scripts/deploy.mjs --network sandbox          # → "sandbox deployment matches deployments/sandbox.json"
 node scripts/verify-near.mjs --network sandbox     # → "verify-near: 26 checks passed"
 node scripts/create-dao.mjs --fetch-wasm dao.wasm  # the Sputnik DAO code testnet's factory deploys, hash-checked
