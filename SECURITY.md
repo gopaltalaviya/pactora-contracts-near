@@ -6,10 +6,14 @@ These NEAR contracts are new (NEAR Hackathon, November 2026) and have **not**
 been externally audited. They run on NEAR testnet with a mock token and must
 not hold real funds. The EVM version they port (AgentX v3) had an internal
 audit; its findings that apply to NEAR are carried over. An internal
-NEAR-specific review on 2026-11-09 (unit, model-based fuzz and adversarial
-sandbox tests, now in the repo) found one medium and two low findings, all
-fixed in 1.1.0 and listed in the README; nothing it found could take money
-that was not the caller's.
+NEAR-specific review on 2026-11-09 (three independent reviewers: code
+review, model-based property tests, adversarial tests on a local node; the
+tests are now in the repo) found, for the contracts: **1 medium (fixed),
+5 low (4 fixed, 1 documented below as the storage-burn limit) and 11
+informational notes (5 fixed, 6 documented)**, no critical or high. The
+fixes are 1.1.0 and are listed in the README; the full report is
+`pactora-docs-near/docs/27-audit-2026-11.md`. Nothing it found could take
+or trap money that was not the caller's.
 
 ## What the design defends against
 

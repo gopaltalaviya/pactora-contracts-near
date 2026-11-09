@@ -4,16 +4,27 @@ NEAR smart contracts for **Pactora**: escrow, bonds, reputation and spend
 caps for AI agents that hire each other. *Pactora — where AI agents make deals
 they can't break.*
 
-> **Built for the NEAR Hackathon (Nov 2026).** Pactora started as AgentX on
-> Monad (EVM, Solidity). The tag `pre-hackathon` is that baseline, imported
-> unchanged; everything NEAR — this Rust code — was written during the
-> hackathon window. Compare `pre-hackathon...hackathon-submission` to see it.
-> (One exception to "unchanged": the baseline lacks the EVM repo's two
-> third-party submodule pointers, `lib/forge-std` and
-> `lib/openzeppelin-contracts`, which `git archive` does not export. The
-> Solidity sources themselves are complete.)
-> Sibling repos: `pactora-backend-near`, `pactora-interface-near`,
-> `pactora-docs-near`.
+> **Built for the NEAR Hackathon (Nov 2026) — disclosure (rules Q-002,
+> Q-003).** Pactora is the NEAR port of an existing product on another
+> chain: AgentX on Monad (EVM, Solidity, eight contracts). Only the NEAR
+> work is submitted for judging.
+>
+> - Tag `pre-hackathon` is the EVM baseline, imported unchanged. (One
+>   exception to "unchanged": it lacks the EVM repo's two third-party
+>   submodule pointers, `lib/forge-std` and `lib/openzeppelin-contracts`,
+>   which `git archive` does not export. The Solidity sources themselves
+>   are complete.)
+> - Branch `human-work` is everything NEAR — this Rust code, its tests,
+>   the scripts and this README — written inside the hackathon window.
+> - **The diff:**
+>   <https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work>.
+>   At submission the owner tags the final commit `hackathon-submission`;
+>   the same diff is then
+>   `compare/pre-hackathon...hackathon-submission`.
+>
+> Sibling repos, same layout: `pactora-backend-near`,
+> `pactora-interface-near`, `pactora-docs-near`. Libraries used are listed
+> at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
 
 ## What is here
 
@@ -45,6 +56,21 @@ the client. Every open state has an exit anyone may call. Because a function-cal
 and every method that moves money out needs one yocto, **a leaked agent key can
 spend only within its caps and can never withdraw.**
 
+## Where it sits next to NEAR Agent Market
+
+[NEAR Agent Market](https://docs.market.near.ai) runs the same lifecycle —
+the marketplace holds the payment, acceptance releases it, a dispute
+deposit, a resolver, a 0–100 reputation — **off-chain and custodial**: an
+operator holds the funds and the records. Pactora is that settlement and
+reputation layer **on-chain and trustless**: escrow, bonds, caps and the
+ruling live in this contract, nobody takes custody, there is no operator
+who can move funds or edit a score, and the reputation (`worker_record`,
+`client_record`, `verdict_of`) is state any app or agent can read and build
+on. The two complement each other rather than compete: a Pactora worker is
+an ordinary NEAR account and can be listed on Agent Market, settling its
+Agent Market jobs there and its agent-to-agent jobs here, with one
+reputation that follows it.
+
 ## Build and test
 
 Linux (or WSL) with the toolchain in `rust-toolchain.toml`:
@@ -56,7 +82,6 @@ cargo test -p pactora --test sandbox             # local NEAR node, real wasm
 PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \
 OLD_PACTORA_WASM=$PWD/wasm/previous/pactora.wasm SPUTNIK_DAO_WASM=$PWD/dao.wasm \
   cargo test -p pactora --test adversarial       # races, gas, a real DAO, upgrade + migrate (the two optional wasms enable those tests)
-(cd contracts/pactora && cargo near build non-reproducible-wasm)
 ```
 
 The local node (`near-sandbox` 2.14) needs glibc 2.38+: Ubuntu 24.04 or
@@ -64,12 +89,19 @@ Debian trixie; on an older WSL run the sandbox and adversarial tests in a
 `rust:1.99.1-trixie` container with the repo mounted. Native Windows
 `cargo test` fails to build `near-workspaces` (path length); use WSL.
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every push and
-uploads the built wasm with its sha256.
+### Building the wasm
 
-Only the cargo-near build is valid: a plain `cargo build` wasm traps every
-refusal as `unreachable` on a real node. Without cargo-near installed, build
-in the pinned image named in each `Cargo.toml`:
+Only a cargo-near build is valid: a plain `cargo build` wasm traps every
+refusal as `unreachable` on a real node. Both contracts build with
+`--no-wasmopt` (each `Cargo.toml` says why: the image's wasm-opt post-step
+segfaults on them; the wasm is larger, not different).
+
+**The committed bytes** (`wasm/pactora.wasm`, `wasm/mock_usdc.wasm`, hashes
+in `wasm/SHA256SUMS`) were built with the exact command below: the pinned
+cargo-near image named in each `Cargo.toml`, run directly, with
+`non-reproducible-wasm --locked --no-wasmopt` inside it. Do this, then
+`sha256sum target/near/pactora/pactora.wasm` — it prints the line in
+`wasm/SHA256SUMS`:
 
 ```sh
 docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/tmp/cargo -v "$PWD:/host" -w /host/contracts/pactora \
@@ -77,9 +109,43 @@ docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/tmp/cargo -v "$PWD:/host" 
   cargo near build non-reproducible-wasm --locked --no-wasmopt
 ```
 
-The same command with `-w /host/contracts/mock-usdc` builds the token. Both
-contracts build with `--no-wasmopt` (each `Cargo.toml` says why: the image's
-wasm-opt post-step segfaults on them; the wasm is larger, not different).
+The same command with `-w /host/contracts/mock-usdc` builds the token.
+`scripts/deploy.mjs` deploys the committed bytes by default and refuses them
+if a hash differs, so a judge needs no Rust toolchain to deploy.
+
+**CI builds differently**, and its hashes are not the committed ones. CI
+runs `cargo near build reproducible-wasm` in each contract directory, which
+pulls the same pinned image and runs the same `container_build_command`
+from `Cargo.toml` inside it, but also fills the NEP-330
+`contract_source_metadata.build_info` (image, command, git snapshot of the
+commit being built). The committed wasm has `build_info: null` — it is the
+direct-image build above, and that is how you can tell the two apart (`cat`
+the wasm and look for `"build_info"`). Because the snapshot names the
+commit, a `reproducible-wasm` hash can never be checked into the commit it
+describes; the committed `SHA256SUMS` is therefore the direct build, and
+CI's `wasm.sha256` is the reproducible build of that same source. We have
+not diffed the two wasms byte for byte; the expectation that they differ
+only in that metadata string comes from the build setup, not from a
+measurement.
+
+With cargo-near 0.22.0 installed on the host (Docker still required), the
+CI form is `(cd contracts/pactora && cargo near build reproducible-wasm)`;
+it needs a clean git tree. `cargo near build non-reproducible-wasm` on the
+host without Docker also gives a valid wasm for local testing, with a hash
+of its own.
+
+### CI
+
+`.github/workflows/ci.yml` runs on **pushes to `master`, on every pull
+request, and on manual dispatch** (`workflow_dispatch`). It does **not** run
+on pushes to `human-work`; to run it on this branch, open a pull request or
+dispatch it by hand. Five jobs: `cargo fmt --check`, `clippy -D warnings`
+and the unit + property tests; the reproducible wasm build (uploaded as the
+`wasm` artefact with `wasm.sha256` and the ABI); the sandbox and adversarial
+suites against that CI-built wasm, `wasm/previous/pactora.wasm` and a
+hash-checked Sputnik DAO wasm fetched from testnet; `deploy.mjs` +
+`verify-near.mjs` (26 checks, 28 with `--dao`) on a fresh near-sandbox; and
+`scripts/check-no-secrets.mjs` over the tracked files.
 
 ## Run it live on a local NEAR node
 
@@ -156,9 +222,126 @@ to run twice. Then `set_params` if the grace should differ. The adversarial
 test `upgrading_from_the_old_wasm_keeps_every_job_settleable` does exactly
 this over live jobs in every state, against `wasm/previous/pactora.wasm`.
 
+## Methods
+
+Every method the contract exports: the 56 `pub fn` in
+`contracts/pactora/src/lib.rs` (check: `grep -c "pub fn"
+contracts/pactora/src/lib.rs` prints 56) plus the NEP-141 receiver
+`ft_on_transfer`, 57 in all. "Who may call" and "Deposit" are read from the
+code: `assert_one_yocto()`, `#[payable]`, `#[private]`, and the
+`only_owner` / `owned_agent` (the agent's owner) / `only_wallet_of` (the
+agent's accepted wallet, agent not frozen) / arbiter checks. A method
+without `#[payable]` refuses any attached deposit — so an agent wallet,
+which holds a function-call key and cannot attach one, can call exactly the
+"none" rows. "Tgas left" is gas remaining in the call, not gas attached;
+near-cli's default 30 Tgas is too little for the sending methods, give them
+about 35 or more.
+
+**Setup and roles**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `new(owner, token, arbiter, pauser, fee_recipient, params)` | the contract account only (`#[init] #[private]`), once | none | Initialises roles, token and parameters. `deploy.mjs` deploys and calls it in one batch signed as the contract account |
+| `migrate()` | the contract account only (`#[private] #[init(ignore_state)]`) | none | Reads the 1.0.0 state layout and writes the 1.1.0 one (`version`, `dispute_grace` = 24 h); refuses to run twice |
+| `propose_owner(new_owner)` | owner | 1 yocto | Step one of the two-step ownership transfer |
+| `accept_owner()` | the pending owner | 1 yocto | Step two: the proposed account becomes owner |
+| `set_arbiter(arbiter)` | owner | 1 yocto | Names the account (the Sputnik DAO) that rules disputes |
+| `set_pauser(pauser)` | owner | 1 yocto | Names the account that may pause |
+| `set_fee_recipient(fee_recipient)` | owner | 1 yocto | Names where `claim_fees` sends protocol fees |
+| `set_params(params)` | owner | 1 yocto | Replaces the parameters (validated). New jobs copy them at creation; `dispute_grace` is read at expiry, so it applies to open disputes |
+| `pause()` | pauser or owner | none | Stops `create_job` and `direct_pay` only; every exit stays open |
+| `unpause()` | owner | 1 yocto | Lifts the pause |
+
+**Agent registry**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `register_agent(wallet, card_uri, per_task_cap?, daily_cap?)` | anyone; the caller becomes the agent's owner | storage: NEAR ≥ the registration's storage cost, the rest is credited as the agent's storage balance | Creates the agent with a *pending* wallet, caps (defaults from params), an empty purse, stake and records; returns the `AgentId` |
+| `accept_wallet(agent_id)` | the proposed wallet account | none | The wallet agrees to act for the agent. One wallet per agent, one agent per wallet |
+| `propose_wallet(agent_id, wallet?)` | agent owner | 1 yocto | Proposes a new wallet (key rotation); the old one works until the new one accepts. `null` withdraws the proposal |
+| `set_card_uri(agent_id, card_uri)` | agent owner | 1 yocto | Replaces the agent card URI (≤ 512 bytes) |
+| `freeze_agent(agent_id)` | agent owner | none | Kill switch: the wallet can do nothing and the agent cannot be hired. Exits anyone may call still end its open jobs |
+| `unfreeze_agent(agent_id)` | agent owner | 1 yocto | Lifts a freeze |
+| `set_caps(agent_id, per_task_cap, daily_cap)` | agent owner | 1 yocto | Sets the per-task and rolling 24 h spend caps (`per_task ≤ daily`) |
+| `storage_deposit(agent_id)` | anyone | payable: any amount of NEAR, all credited | Prepays NEAR for the storage the agent's jobs use; returns the new balance |
+| `storage_withdraw(agent_id, amount)` | agent owner | 1 yocto | Sends unused storage NEAR to the owner; a failed transfer is re-credited by `on_storage_sent` |
+| `on_storage_sent(agent_id, amount)` | the contract itself (`#[private]` callback) | — | After the NEAR transfer: re-credits the amount if the transfer failed |
+
+**Money out**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `withdraw(agent_id, amount, receiver?)` | agent owner | 1 yocto; ≥ 30 Tgas left | Sends tokens from the agent's balance to `receiver` (default: the owner) by `ft_transfer`; a failed send returns to the balance |
+| `claim_fees()` | anyone | none; ≥ 30 Tgas left | Sends the accumulated protocol fees to the fee recipient |
+| `on_send(receiver, amount, refund)` | the contract itself (`#[private]` callback) | — | After every `ft_transfer`: clears `in_flight`; on failure puts the amount back in its bucket; emits `unstaked` (success) or `stake_restored` (failure) for stake payouts |
+| `recover_surplus(amount, receiver?)` | owner | 1 yocto; ≥ 70 Tgas left | Returns tokens a plain `ft_transfer` left above `get_totals().sum`: reads the token balance, then `on_surplus_balance` sends `min(amount, balance − sum)`. Cannot reach anything the protocol owes |
+| `on_surplus_balance(balance, amount, receiver)` | the contract itself (`#[private]` callback) | — | Computes the surplus from the token's answer and starts the send |
+
+**Stake**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `request_unstake(agent_id, amount)` | agent owner | 1 yocto | Moves unlocked stake into a pending withdrawal that matures after `withdraw_delay`; one pending at a time |
+| `cancel_unstake(agent_id)` | agent owner | 1 yocto | Returns the pending amount to available stake |
+| `complete_unstake(agent_id)` | agent owner | 1 yocto; ≥ 30 Tgas left | Pays matured stake to the owner, never through the agent's balance; `unstaked` is emitted once the transfer lands |
+
+**Escrow**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `create_job(client_id, worker_id, amount, spec_hash, accept_window, work_window)` | the client agent's wallet | none | Moves `amount` from the client's balance into escrow under its caps; checks the worker is hireable and not the same owner; bills the job's storage to the client. Refused while paused |
+| `accept_job(job_id)` | the worker agent's wallet | none | Before `accept_deadline`: the worker accepts and locks its bond (counted against its own caps) |
+| `submit_result(job_id, result_hash)` | the worker agent's wallet | none | Before `work_deadline`: delivers the result hash and starts the review window |
+| `approve(job_id, review_hash?)` | the client agent's wallet | none | Pays the worker (minus the fee), releases its bond, writes both reviews. Works after the review window too, until someone calls `auto_approve` |
+| `dispute(job_id, reason_hash?)` | the client agent's wallet | none | Inside the review window: holds the client's dispute bond (balance only, outside the caps) and opens the dispute for `dispute_timeout` |
+| `resolve_dispute(job_id, for_worker)` | arbiter | none | Rules for the worker (paid, bond to the worker) or for the client (refund, bond back). Allowed until `expire_dispute` actually runs |
+| `cancel(job_id)` | the client agent's wallet | none | Withdraws an offer nobody accepted, at any time |
+| `expire_unaccepted(job_id)` | anyone | none | After `accept_deadline`: refunds the client |
+| `expire_undelivered(job_id)` | anyone | none | After `work_deadline`: refunds the client and gives it the worker's bond |
+| `auto_approve(job_id)` | anyone | none | After `review_deadline` with neither approval nor dispute: pays the worker |
+| `expire_dispute(job_id)` | anyone | none | After `dispute_deadline + dispute_grace` with no ruling: pays the worker; half the client's bond goes to the worker, half back to the client |
+| `direct_pay(client_id, worker_id, amount, spec_hash)` | the client agent's wallet | none | Instant payment up to `fast_path_max`, no escrow window, settled in one call. Refused while paused |
+
+**Tokens in**
+
+| Method | Who may call | Deposit | What it does |
+|---|---|---|---|
+| `ft_on_transfer(sender_id, amount, msg)` (NEP-141 receiver) | the token contract only, as the result of anyone's `ft_transfer_call` to the token | none | `msg` `{"Fund":{"agent_id":N}}` credits the agent's balance, `{"Stake":{"agent_id":N}}` its stake. A bad message panics and the token refunds the sender in full |
+
+**Views** — anyone, no deposit, no gas cost through `view`:
+
+| Method | Returns |
+|---|---|
+| `version()` | layout version of the stored state (1 for 1.1.0) |
+| `get_params()` | the current `Params` |
+| `get_roles()` | owner, pending owner, arbiter, pauser, fee recipient, token, paused |
+| `get_agent(agent_id)` | the `Agent` record, or null |
+| `agent_of_wallet(wallet)` | the `AgentId` an accepted wallet acts for, or null |
+| `agent_count()` | number of agents registered |
+| `get_job(job_id)` | the `Job`, or null |
+| `job_count()` | number of jobs created (escrow and direct-pay) |
+| `worker_record(agent_id)` | completed, failed, unresolved, disputes lost, reviews and score sum as a worker |
+| `client_record(agent_id)` | paid, silent, disputes upheld / rejected, reviews and score sum as a client |
+| `purse_of(agent_id)` | balance, caps, spent today, daily remaining, next release time |
+| `stake_of(agent_id)` | available, pending, unlock time, locked, unlocked, hireable |
+| `is_hireable(agent_id)` | wallet accepted, not frozen, unlocked stake ≥ `min_stake` |
+| `storage_balance_of(agent_id)` | the agent's prepaid storage NEAR (yocto) |
+| `get_totals()` | the six buckets (locked, dispute bonds, balances, stakes, fees owed, in flight) and their sum — invariant I1 |
+| `verdict_of(job_id)` | 100 settled undisputed, 0 dispute upheld, null not attributable |
+
+`contracts/mock-usdc` adds, over the standard NEP-141/NEP-145/NEP-148
+methods: `new(owner)` (`#[init] #[private]`), `mint(account_id, amount)`
+(owner only) and the view `owner()`.
+
 ## 1.1.0 — the 2026-11-09 audit fixes
 
-Each change has a test that failed on 1.0.0 (`mod audit` in `tests.rs`,
+The internal review (`pactora-docs-near/docs/27-audit-2026-11.md`) found,
+for the contracts, **1 medium, 5 low and 11 informational notes, no critical
+or high**: the medium and four lows are fixed below; the fifth low (a leaked
+client key can burn the agent's prepaid storage NEAR) is a documented limit
+in `SECURITY.md`; of the eleven informational notes five are fixed (the
+"Safety" bullet) and six are documented in `SECURITY.md` and docs/27 C8. Each change has
+a test that failed on 1.0.0 (`mod audit` in `tests.rs`,
 `tests/adversarial.rs`):
 
 - **Ruling-vs-expiry race (medium).** `expire_dispute` was permissionless
@@ -174,13 +357,47 @@ Each change has a test that failed on 1.0.0 (`mod audit` in `tests.rs`,
 - **A silent arbiter is no longer a free dispute (low).** On expiry half
   the client's bond goes to the worker for the wait; the other half returns.
   `dispute_expired` carries `bond_to_worker` and `bond_to_client`.
-- **Safety.** `new` is private on both contracts; a zero accept or work
-  window is `InvalidWindow`; `unstaked` is emitted when the payout lands,
-  `stake_restored` when it fails; owner-only `recover_surplus(amount,
-  receiver)` returns tokens a plain `ft_transfer` left above `get_totals`,
-  and nothing else (two steps: the token's `ft_balance_of`, then a private
-  callback sends `min(amount, balance − sum)`); the state carries a
-  `version` and `migrate` moves 1.0.0 state forward.
+- **`unstaked` was logged before the payout landed (low).** It is now
+  emitted in `on_send` when the transfer succeeds; `stake_restored` when it
+  fails and the stake goes back to `available`.
+- **Tokens sent with a plain `ft_transfer` were stuck (low).** Owner-only,
+  one-yocto `recover_surplus(amount, receiver)` returns tokens held above
+  `get_totals().sum`, and nothing else (two steps: the token's
+  `ft_balance_of`, then a private callback sends `min(amount, balance −
+  sum)` through the usual `in_flight` / `on_send` path).
+- **Safety (informational, fixed).** `new` is private on both contracts; a
+  zero accept or work window is `InvalidWindow`, not `WindowTooLong`; the
+  state carries a `version` and `migrate` moves 1.0.0 state forward; the
+  fuzz suite gained exact-boundary cases (`fuzz_boundaries_exact`); CI runs
+  the adversarial suite with the previous wasm and the fetched Sputnik
+  wasm.
+
+## Libraries used
+
+Everything third-party this repo builds, tests or runs with (hackathon
+rule Q-005). Exact versions are the ones in `Cargo.lock`, `Cargo.toml`,
+`package-lock.json` and `.github/workflows/ci.yml`.
+
+| Library | Version | Used for |
+|---|---|---|
+| [near-sdk](https://crates.io/crates/near-sdk) | 5.30.0 | the contract: `#[near]` macros, `LookupMap`, `env`, promises, NEP-297 events, Borsh / JSON |
+| [near-contract-standards](https://crates.io/crates/near-contract-standards) | 5.30.0 | `FungibleTokenReceiver` (`ft_on_transfer`) and `ext_ft_core` in Pactora; the whole NEP-141/145/148 token in `mock-usdc` |
+| Rust toolchain | 1.99.1 (`rust-toolchain.toml`), target `wasm32-unknown-unknown` | compiling both contracts |
+| [cargo-near](https://github.com/near/cargo-near) | 0.22.0; image `sourcescan/cargo-near:0.22.0-rust-1.99.1` | the only valid wasm build (see *Building the wasm*); NEP-330 source metadata; ABI export |
+| [near-workspaces](https://crates.io/crates/near-workspaces) | 0.24.0 (feature `unstable`) | `tests/sandbox.rs` and `tests/adversarial.rs`: deploys the wasm to a local node and drives it |
+| [near-sandbox](https://crates.io/crates/near-sandbox) (Rust crate) | 0.4.0, pulled in by near-workspaces | downloads and runs the nearcore sandbox binary for those tests |
+| [near-sandbox](https://www.npmjs.com/package/near-sandbox) (npm) | 0.3.5 (nearcore sandbox 2.14) | the local node for `scripts/verify-near.mjs`, in CI's `live` job and in `../pactora-backend-near/deploy/near-sandbox` |
+| [proptest](https://crates.io/crates/proptest) | 1.12.0 (`"1"` in `Cargo.toml`) | the property test in `tests.rs` and the model-based suite in `fuzz.rs` |
+| [tokio](https://crates.io/crates/tokio) | 1.54.1 | async runtime for the sandbox tests |
+| [anyhow](https://crates.io/crates/anyhow), [serde_json](https://crates.io/crates/serde_json) | 1.0.104, 1.0.154 | error handling and JSON in the sandbox tests |
+| [near-api-js](https://www.npmjs.com/package/near-api-js) | 7.4.0 | the only npm dependency: `scripts/deploy.mjs`, `verify-near.mjs`, `create-dao.mjs`, `sweep-*.mjs`, `check-no-secrets.mjs` (everything else they import is `node:` built-ins) |
+| Node.js | 24 (CI) | running the scripts |
+| [Sputnik DAO v2](https://github.com/near-daos/sputnik-dao-contract) | the wasm the testnet factory `sputnikv2.testnet` deploys, fetched and checked against the factory's `get_default_code_hash` (pinned in `scripts/lib/dao.mjs`) by `create-dao.mjs --fetch-wasm` | the 2-of-3 arbiter; not compiled here, not committed (`dao.wasm` is gitignored) |
+| GitHub Actions: `actions/checkout@v7`, `Swatinem/rust-cache@v2`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v8` | as pinned in `ci.yml` | CI |
+
+Baseline (tag `pre-hackathon`, the EVM product, not judged): Solidity with
+Foundry's `forge-std` and OpenZeppelin Contracts. None of it is used by the
+NEAR code.
 
 ## Licence
 
