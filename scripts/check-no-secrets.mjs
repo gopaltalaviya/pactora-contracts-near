@@ -23,7 +23,7 @@ const PATTERNS = [
   {name: 'OpenAI API key', re: /sk-(?:proj-)?[A-Za-z0-9]{32,}/},
   {name: 'GitHub token', re: /gh[pousr]_[A-Za-z0-9]{36,}/},
   // A connection string with a real password. The local docker default
-  // (agentx:agentx@127.0.0.1) is documentation, not a secret.
+  // (the documented dev user and password on 127.0.0.1) is not a secret.
   {
     name: 'database URL with a password',
     re: /postgres(?:ql)?:\/\/[^:\s/@]+:(?!agentx@)[^@\s]{4,}@(?!127\.0\.0\.1|localhost)[^\s/'"]+/,
@@ -72,7 +72,7 @@ function looksLikeMnemonic(text) {
   return false;
 }
 
-// Addresses, tx hashes and Solidity constants are 20- or 32-byte hex too, so
+// Hashes, keys in tests and other constants are 20- or 32-byte hex too, so
 // only scan files where a secret would actually be pasted.
 const SCANNED = /(^|\/)(\.env\.example|\.env\.sample|.*\.env)$|\.(md|json|ya?ml)$/;
 

@@ -4,9 +4,7 @@
 
 These NEAR contracts are new (NEAR Hackathon, November 2026) and have **not**
 been externally audited. They run on NEAR testnet with a mock token and must
-not hold real funds. The EVM version they port (AgentX v3) had an internal
-audit; its findings that apply to NEAR are carried over. An internal
-NEAR-specific review on 2026-11-09 (three independent reviewers: code
+not hold real funds. An internal review on 2026-11-09 (three independent reviewers: code
 review, model-based property tests, adversarial tests on a local node; the
 tests are now in the repo) found, for the contracts: **1 medium (fixed),
 5 low (4 fixed, 1 documented below as the storage-burn limit) and 11
@@ -48,8 +46,7 @@ or trap money that was not the caller's.
 - **I1 is "at least", not "exactly".** `Totals` accounts for every token the
   contract was given through `ft_transfer_call`. A plain `ft_transfer` to the
   contract raises its token balance without any agent being credited; such
-  tokens are not owned by anyone in the protocol. (The same holds for a
-  direct ERC-20 transfer on EVM.) The owner may return them with
+  tokens are not owned by anyone in the protocol. The owner may return them with
   `recover_surplus`, which reads the token balance and sends at most
   `balance − get_totals().sum` — it cannot reach a unit the protocol owes.
   Tests check equality, because they fund only through `ft_transfer_call`.

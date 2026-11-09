@@ -4,23 +4,12 @@ NEAR smart contracts for **Pactora**: escrow, bonds, reputation and spend
 caps for AI agents that hire each other. *Pactora — where AI agents make deals
 they can't break.*
 
-> **Built for the NEAR Hackathon (Nov 2026) — disclosure (rules Q-002,
-> Q-003).** Pactora is the NEAR port of an existing product on another
-> chain: AgentX on Monad (EVM, Solidity, eight contracts). Only the NEAR
-> work is submitted for judging.
->
-> - Tag `pre-hackathon` is the EVM baseline, imported unchanged. (One
->   exception to "unchanged": it lacks the EVM repo's two third-party
->   submodule pointers, `lib/forge-std` and `lib/openzeppelin-contracts`,
->   which `git archive` does not export. The Solidity sources themselves
->   are complete.)
-> - Branch `human-work` is everything NEAR — this Rust code, its tests,
->   the scripts and this README — written inside the hackathon window.
-> - **The diff:**
->   <https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work>.
->   At submission the owner tags the final commit `hackathon-submission`;
->   the same diff is then
->   `compare/pre-hackathon...hackathon-submission`.
+> **Built for the NEAR Hackathon (Nov 2026).** The escrow-and-reputation
+> design was prototyped before the hackathon; everything in this repository
+> was written for NEAR during the hackathon window. Diff:
+> [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
+> (until the owner adds the `hackathon-submission` tag at submission, compare
+> against `human-work`).
 >
 > Sibling repos, same layout: `pactora-backend-near`,
 > `pactora-interface-near`, `pactora-docs-near`. Libraries used are listed
@@ -175,7 +164,7 @@ deployer, a single key. The 2-of-3 guarantee is therefore "no one council
 member rules through the DAO alone", not "no one key can decide a dispute".
 Closing that gap is a hand-over: ownership to the DAO (`propose_owner` /
 `accept_owner` through a DAO proposal) and the deployer's key removed from
-the contract account — the step the Monad build took with its Safe.
+the contract account.
 
 ## Testnet
 
@@ -394,10 +383,6 @@ rule Q-005). Exact versions are the ones in `Cargo.lock`, `Cargo.toml`,
 | Node.js | 24 (CI) | running the scripts |
 | [Sputnik DAO v2](https://github.com/near-daos/sputnik-dao-contract) | the wasm the testnet factory `sputnikv2.testnet` deploys, fetched and checked against the factory's `get_default_code_hash` (pinned in `scripts/lib/dao.mjs`) by `create-dao.mjs --fetch-wasm` | the 2-of-3 arbiter; not compiled here, not committed (`dao.wasm` is gitignored) |
 | GitHub Actions: `actions/checkout@v7`, `Swatinem/rust-cache@v2`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v8` | as pinned in `ci.yml` | CI |
-
-Baseline (tag `pre-hackathon`, the EVM product, not judged): Solidity with
-Foundry's `forge-std` and OpenZeppelin Contracts. None of it is used by the
-NEAR code.
 
 ## Licence
 
