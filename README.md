@@ -170,11 +170,18 @@ the contract account.
 
 ```sh
 cp .env.example .env    # set DEPLOYER_ACCOUNT_ID and DEPLOYER_SECRET_KEY
+node --env-file=.env scripts/preflight-testnet.mjs              # 0. read-only go/no-go; spends nothing
 node --env-file=.env scripts/create-dao.mjs --network testnet   # council + DAO; ids and keys go to .env only
 node --env-file=.env scripts/deploy.mjs --network testnet       # writes deployments/testnet.json
 node --env-file=.env scripts/verify-near.mjs --network testnet  # every flow, the DAO ruling included
 node --env-file=.env scripts/sweep-testnet.mjs                  # only after a run that stopped half-way
 ```
+
+Step 0 sends no transaction: it checks the network, the deployer's key (full
+access on the account), the balance against the budget below, the wasm hashes,
+the params and any `deployments/testnet.json` or council values already there,
+then prints `GO` with the commands still to run, or `NO-GO` and exits non-zero
+(`npm run test:preflight` unit-tests each refusal).
 
 The deployer is **your own account**, and no script asks you to fund an account
 whose key you do not hold:

@@ -8,6 +8,8 @@
     "near-api-js": "7.4.0"
   },
   "scripts": {
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "preflight": "node --env-file=.env scripts/preflight-testnet.mjs",
+    "test:preflight": "node --test scripts/preflight.test.mjs"
   }
 }
