@@ -79,7 +79,7 @@ Linux (or WSL) with the toolchain in `rust-toolchain.toml`:
 ```sh
 cargo test --workspace --lib -- --test-threads=1  # unit, property and fuzz tests (one thread: near-sdk's mocked runtime can crash in parallel)
 PROPTEST_CASES=2000 cargo test -p pactora --lib fuzz -- --test-threads=1   # a deeper fuzz run (default 256 cases)
-cargo test -p pactora --test sandbox             # local NEAR node, real wasm
+PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \n  cargo test -p pactora --test sandbox           # local NEAR node, the committed wasm (unset: built with cargo-near)
 PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \
 OLD_PACTORA_WASM=$PWD/wasm/previous/pactora.wasm SPUTNIK_DAO_WASM=$PWD/dao.wasm \
   cargo test -p pactora --test adversarial       # races, gas, a real DAO, upgrade + migrate (the two optional wasms enable those tests)

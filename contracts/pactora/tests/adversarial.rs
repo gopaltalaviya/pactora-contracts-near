@@ -1043,7 +1043,19 @@ async fn racing_transactions_never_pay_twice() -> anyhow::Result<()> {
         job(&e, j).await?["state"]
     );
     ok(ra, "the late ruling");
-    refused(&rb, "DeadlineNotPassed", "expire_dispute inside the grace");
+    // The two land in either order. Expiry first: refused inside the grace
+    // (`DeadlineNotPassed`). Ruling first: the job is already Refunded, so the
+    // expiry is refused as `InvalidState` (seen 2026-11-10). Either way it is
+    // refused and the ruling ends the job, which the next assert checks.
+    assert!(
+        rb.is_failure(),
+        "expire_dispute inside the grace must fail but succeeded"
+    );
+    let rbs = format!("{rb:?}");
+    assert!(
+        rbs.contains("DeadlineNotPassed") || rbs.contains("InvalidState"),
+        "expire_dispute inside the grace: expected `DeadlineNotPassed` or `InvalidState`, got {rbs}"
+    );
     assert_eq!(
         job(&e, j).await?["state"],
         "Refunded",
