@@ -395,6 +395,8 @@ rule Q-005). Exact versions are the ones in `Cargo.lock`, `Cargo.toml`,
 | [Sputnik DAO v2](https://github.com/near-daos/sputnik-dao-contract) | the wasm the testnet factory `sputnikv2.testnet` deploys, fetched and checked against the factory's `get_default_code_hash` (pinned in `scripts/lib/dao.mjs`) by `create-dao.mjs --fetch-wasm` | the 2-of-3 arbiter; not compiled here, not committed (`dao.wasm` is gitignored) |
 | GitHub Actions: `actions/checkout@v7`, `Swatinem/rust-cache@v2`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `actions/download-artifact@v8` | as pinned in `ci.yml` | CI |
 
+AI assistance: Claude Code was used to write and review code and docs.
+
 ## Licence
 
 MIT — see `LICENSE`.
