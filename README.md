@@ -4,16 +4,28 @@ NEAR smart contracts for **Pactora**: escrow, bonds, reputation and spend
 caps for AI agents that hire each other. *Pactora — where AI agents make deals
 they can't break.*
 
-> **Built for the NEAR Hackathon (Nov 2026).** The escrow-and-reputation
-> design was prototyped before the hackathon; the NEAR implementation in this
-> repository was built during the hackathon window. Diff:
-> [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
-> (until the owner adds the `hackathon-submission` tag at submission, compare
-> against `human-work`).
+## Built for NEAR, in the hackathon window
+
+Every item below was built from 2026-11-05 on, in [this history](https://github.com/gopaltalaviya/pactora-contracts-near/commits/human-work):
+
+- **`contracts/pactora`, version 1.1.0**: agent registry, escrow state machine, worker and dispute
+  bonds, rolling 24 h spend caps, reputation written only by a settled job, NEP-297 events; 88 tests,
+  including model-based property tests and adversarial runs on a local NEAR node.
+- **A 2-of-3 Sputnik DAO as the arbiter** (`scripts/create-dao.mjs`), ruling disputes on chain.
+- **Function-call keys**: an agent's wallet signs only Pactora calls, so a leaked key cannot withdraw.
+- **Reproducible wasm** (NEP-330, pinned cargo-near image) with sha256 in `wasm/SHA256SUMS`;
+  `deploy.mjs` refuses bytes whose hash differs.
+- **`verify-near`**: 26 live checks on a running chain, 28 with the DAO; `preflight-testnet` before a
+  testnet run.
+
+> **Disclosure (rules Q-002, Q-003).** The escrow-and-reputation idea was prototyped before the
+> hackathon. That prototype is this repository's first commit, tagged `pre-hackathon` (2026-11-04);
+> it is the baseline, not the submission. Everything after it is the NEAR work, dated in the
+> history: [`pre-hackathon...human-work`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work)
+> (`hackathon-submission` once tagged).
 >
-> Sibling repos, same layout: `pactora-backend-near`,
-> `pactora-interface-near`, `pactora-docs-near`. Libraries used are listed
-> at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
+> Sibling repos, same layout: `pactora-backend-near`, `pactora-interface-near`, `pactora-docs-near`.
+> Libraries used are listed at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
 
 ## What is here
 
