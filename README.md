@@ -21,8 +21,8 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 > **Disclosure (rules Q-002, Q-003).** The escrow-and-reputation idea was prototyped before the
 > hackathon. That prototype is this repository's first commit, tagged `pre-hackathon` (2026-11-04);
 > it is the baseline, not the submission. Everything after it is the NEAR work, dated in the
-> history: [`pre-hackathon...human-work`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work)
-> (`hackathon-submission` once tagged).
+> history: [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
+> (the tag is added at submission; until then [`pre-hackathon...human-work`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work)).
 >
 > Sibling repos, same layout: `pactora-backend-near`, `pactora-interface-near`, `pactora-docs-near`.
 > Libraries used are listed at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
