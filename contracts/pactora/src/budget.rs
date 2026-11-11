@@ -1,7 +1,7 @@
-//! The rolling 24 h spend cap, ported line for line from v3
-//! `AgentAccountCore` (`_chargeSpend`, `_roll`, `_windowSpent`,
-//! `nextReleaseAt`). Pure functions over `Purse`, so they are tested without
-//! a blockchain.
+//! The rolling 24 h spend cap: `charge` records a spend, `roll` clears the
+//! hourly buckets that left the window, `window_spent` sums the rest, and
+//! `next_release_at` says when the oldest spend frees up. Pure functions over
+//! `Purse`, so they are tested without a blockchain.
 
 use near_sdk::require;
 
@@ -36,7 +36,7 @@ pub fn roll(p: &mut Purse, hour: u64) {
     p.last_hour = hour;
 }
 
-/// Check the caps and record `spent`. Panics with the v3 error names.
+/// Check the caps and record `spent`. Panics with the error names in `errors.rs`.
 pub fn charge(p: &mut Purse, spent: u128, now_s: u64) {
     require!(spent <= p.per_task_cap, PER_TASK_CAP_EXCEEDED);
     let hour = hour_of(now_s);
@@ -107,8 +107,8 @@ mod tests {
         assert_eq!(daily_remaining(&p, 10 * HOUR), 0);
     }
 
-    /// The bug v3 fixed (2× the cap across a fixed day boundary): a rolling
-    /// window refuses the second full spend one hour later.
+    /// The bug a fixed day boundary would allow (2× the cap across midnight):
+    /// a rolling window refuses the second full spend one hour later.
     #[test]
     fn no_double_spend_across_a_day_boundary() {
         let mut p = purse(100, 100);

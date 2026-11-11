@@ -1,6 +1,6 @@
-//! Panic messages. The names match the v3 EVM errors (TaskEscrow, StakeVault,
-//! AgentAccountCore) wherever the rule is the same, so the backend maps a
-//! refusal to one meaning on both chains.
+//! Panic messages. Each is a stable name the backend matches, so a refusal
+//! maps to exactly one meaning in the API. Changing a string here is a
+//! breaking change for every caller.
 
 pub const NOT_OWNER: &str = "NotOwner";
 pub const NOT_PENDING_OWNER: &str = "NotPendingOwner";

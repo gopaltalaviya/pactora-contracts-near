@@ -4,6 +4,11 @@
  *
  *   node scripts/deploy.mjs --network sandbox   # local near-sandbox (Docker)
  *   node scripts/deploy.mjs --network testnet   # NEAR testnet — never mainnet
+ *   node scripts/deploy.mjs --network testnet --resume
+ *       finish a deploy that stopped half-way (e.g. the RPC dropped the
+ *       connection): an account that already runs the committed wasm is kept,
+ *       an account with no code gets the code and `new`; any other code, or
+ *       an account the deployer's key cannot sign for, is refused.
  *
  * Each contract account is created, funded and given the deployer's key in
  * one transaction; then, signed AS THAT ACCOUNT with the same key, its wasm
@@ -26,6 +31,7 @@ import {readFileSync, writeFileSync, existsSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Account, JsonRpcProvider, KeyPair, KeyPairSigner, actions, nearToYocto} from 'near-api-js';
+import {codeHash} from './lib/dao.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name) => {
@@ -97,6 +103,10 @@ const keyPair = KeyPair.fromString(secret);
 const deployer = new Account(deployerId, provider, new KeyPairSigner(keyPair));
 const TGAS = 1_000_000_000_000n;
 
+const RESUME = process.argv.includes('--resume');
+/** The code hash of an account with no contract. */
+const NO_CODE = '11111111111111111111111111111111';
+
 const exists = async (id) =>
   provider.viewAccount({accountId: id, blockQuery: {finality: 'final'}}).then(
     () => true,
@@ -109,13 +119,33 @@ const exists = async (id) =>
  * may initialise, so the two steps need no atomicity).
  */
 async function createAndDeploy(accountId, wasm, nearAmount, init) {
-  if (await exists(accountId)) fail(`${accountId} already exists — this script does not overwrite a deployment`);
-  const out = await deployer.signAndSendTransaction({
-    receiverId: accountId,
-    actions: [actions.createAccount(), actions.transfer(nearToYocto(nearAmount)), actions.addFullAccessKey(keyPair.getPublicKey())],
-    waitUntil: 'FINAL',
-  });
-  console.log(`  ${accountId}  created  ${out.transaction.hash}`);
+  let out = null;
+  if (await exists(accountId)) {
+    if (!RESUME) {
+      fail(
+        `${accountId} already exists — this script does not overwrite a deployment ` +
+          '(after a run that stopped half-way, re-run with --resume)',
+      );
+    }
+    const view = await provider.viewAccount({accountId, blockQuery: {finality: 'final'}});
+    // near-api-js returns the RPC's own field name here, whatever its types say.
+    const onChain = view.code_hash ?? view.codeHash;
+    if (typeof onChain !== 'string') fail(`${accountId}: no code hash in view_account — refusing to resume`);
+    if (wasm && onChain === codeHash(wasm)) {
+      console.log(`  ${accountId}  already runs the committed wasm (resume: kept)`);
+      return null;
+    }
+    if (onChain !== NO_CODE) fail(`${accountId} runs other code (${onChain}) — refusing to resume over it`);
+    if (!wasm) return null;
+    console.log(`  ${accountId}  exists with no code (resume: deploying)`);
+  } else {
+    out = await deployer.signAndSendTransaction({
+      receiverId: accountId,
+      actions: [actions.createAccount(), actions.transfer(nearToYocto(nearAmount)), actions.addFullAccessKey(keyPair.getPublicKey())],
+      waitUntil: 'FINAL',
+    });
+    console.log(`  ${accountId}  created  ${out.transaction.hash}`);
+  }
   if (wasm) {
     const self = new Account(accountId, provider, new KeyPairSigner(keyPair));
     const d = await self.signAndSendTransaction({
@@ -134,7 +164,8 @@ const names = {
   PaymentToken: `musdc.${parent}`,
   Arbiter: arbiter ?? `arbiter.${parent}`,
 };
-console.log(`deploying to ${chainId} from ${deployerId}`);
+console.log(`deploying to ${chainId} from ${deployerId}${RESUME ? ' (resume)' : ''}`);
+const resumeHead = RESUME ? (await provider.viewBlock({finality: 'final'})).header.height : null;
 
 const usdcOut = await createAndDeploy(names.PaymentToken, usdcWasm, slug === 'sandbox' ? '10' : '3', {owner: deployerId});
 if (slug === 'sandbox') await createAndDeploy(names.Arbiter, null, '10');
@@ -165,7 +196,12 @@ if (JSON.stringify(onChain) !== JSON.stringify(params)) {
 const roles = await provider.callFunction({contractId: names.Pactora, method: 'get_roles', args: {}});
 if (roles.token !== names.PaymentToken || roles.arbiter !== names.Arbiter) fail(`get_roles: ${JSON.stringify(roles)}`);
 
-const startBlock = (await provider.viewBlock({blockId: usdcOut.transaction_outcome.block_hash})).header.height;
+// The indexer starts here. A resumed run has no creation receipt for the
+// token, so it starts at the head as the resume began: before Pactora's
+// `new`, the first block anything the indexer reads can appear in.
+const startBlock = usdcOut
+  ? (await provider.viewBlock({blockId: usdcOut.transaction_outcome.block_hash})).header.height
+  : resumeHead;
 const deployment = {
   chainId,
   deployedAt: slug === 'sandbox' ? 'fixed' : new Date().toISOString(),

@@ -20,7 +20,7 @@ if (!rootId?.endsWith('.testnet')) {
   console.error('sweep-testnet: DEPLOYER_ACCOUNT_ID (a .testnet account) must be set in .env');
   process.exit(2);
 }
-const provider = new JsonRpcProvider({url: process.env.RPC_URL_TESTNET || 'https://rpc.testnet.near.org'});
+const provider = new JsonRpcProvider({url: process.env.RPC_URL_TESTNET || 'https://test.rpc.fastnear.com'});
 const {chain_id} = await provider.viewNodeStatus();
 if (chain_id !== 'testnet') {
   console.error(`sweep-testnet: the RPC is "${chain_id}", expected "testnet"`);

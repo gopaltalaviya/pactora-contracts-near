@@ -4,6 +4,23 @@ NEAR smart contracts for **Pactora**: escrow, bonds, reputation and spend
 caps for AI agents that hire each other. *Pactora — where AI agents make deals
 they can't break.*
 
+## Live on NEAR testnet
+
+Deployed 2026-11-10 from this branch; checked on chain by `verify-near --network testnet --dao` (25 checks passed,
+the DAO ruling included):
+
+| Contract | Account | |
+|---|---|---|
+| Pactora 1.1.0 (escrow, bonds, caps, reputation) | `pactora.gopalt.testnet` | [nearblocks](https://testnet.nearblocks.io/address/pactora.gopalt.testnet) |
+| mUSDC (test token, 6 decimals) | `musdc.gopalt.testnet` | [nearblocks](https://testnet.nearblocks.io/address/musdc.gopalt.testnet) |
+| Arbiter: 2-of-3 Sputnik DAO | `pactora-arbiter-gopalt.sputnikv2.testnet` | [nearblocks](https://testnet.nearblocks.io/address/pactora-arbiter-gopalt.sputnikv2.testnet) |
+
+The deployed code is the committed `wasm/pactora.wasm`, sha256 `e0ed7876…290a` (`wasm/SHA256SUMS` in
+`pactora-contracts-near`). Ids and the indexer's start block: `deployments/testnet.json`. Test tokens only, no real money.
+
+**Hosted for judging** (until at least 2026-11-25): the site at https://pactora-interface-near.vercel.app and the API at
+https://api.64-177-60-103.sslip.io (`/v1/status` shows each part live).
+
 ## Built for NEAR, in the hackathon window
 
 Every item below was built from 2026-11-05 on, in [this history](https://github.com/gopaltalaviya/pactora-contracts-near/commits/human-work):
@@ -18,9 +35,9 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 - **`verify-near`**: 26 live checks on a running chain, 28 with the DAO; `preflight-testnet` before a
   testnet run.
 
-> **Disclosure (rules Q-002, Q-003).** The escrow-and-reputation idea was prototyped before the
-> hackathon. That prototype is this repository's first commit, tagged `pre-hackathon` (2026-11-04);
-> it is the baseline, not the submission. Everything after it is the NEAR work, dated in the
+> **Disclosure (rules Q-002, Q-003).** Pactora existed before this hackathon as an EVM product on
+> **Monad** (formerly AGENTX: Solidity contracts, built for Monad Metropolis). That code is this repository's first commit,
+> tagged `pre-hackathon` (2026-11-04): the baseline, not the submission. Only the NEAR work after it is submitted, dated in the
 > history: [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
 > (the tag is added at submission; until then [`pre-hackathon...human-work`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work)).
 >
@@ -189,9 +206,17 @@ cp .env.example .env    # set DEPLOYER_ACCOUNT_ID and DEPLOYER_SECRET_KEY
 node --env-file=.env scripts/preflight-testnet.mjs              # 0. read-only go/no-go; spends nothing
 node --env-file=.env scripts/create-dao.mjs --network testnet   # council + DAO; ids and keys go to .env only
 node --env-file=.env scripts/deploy.mjs --network testnet       # writes deployments/testnet.json
+node --env-file=.env scripts/deploy.mjs --network testnet --resume  # only if a deploy stopped half-way
 node --env-file=.env scripts/verify-near.mjs --network testnet  # every flow, the DAO ruling included
 node --env-file=.env scripts/sweep-testnet.mjs                  # only after a run that stopped half-way
 ```
+
+If the RPC drops the connection mid-deploy (the 400 KB wasm upload is the
+largest transaction), check the accounts on nearblocks, then run with
+`--resume`. It keeps an account that already runs the committed wasm
+(compared by code hash), deploys to one that exists with no code, and refuses
+any other code. The default RPC is FastNEAR (`test.rpc.fastnear.com`), because
+`rpc.testnet.near.org` is deprecated and rate-limited.
 
 Step 0 sends no transaction: it checks the network, the deployer's key (full
 access on the account), the balance against the budget below, the wasm hashes,

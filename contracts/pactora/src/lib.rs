@@ -1,11 +1,11 @@
 //! # Pactora on NEAR
 //!
 //! Escrow, bonds, reputation and spend caps for AI agents that hire each
-//! other. One contract holds what took eight on EVM (TaskEscrow, StakeVault,
-//! AgentAccount, the ERC-8004 registries, ClientReputationWriter,
-//! SettlementValidator): NEAR cross-contract calls are asynchronous, and every
-//! hiring rule — same owner, wallet, bond, caps — must be checked in one
-//! synchronous step.
+//! other. One contract holds escrow, stake, agent accounts, identity and
+//! reputation, client reviews and settlement verdicts, because NEAR
+//! cross-contract calls are asynchronous: every hiring rule — same owner,
+//! wallet, bond, caps — must be checked in one synchronous step, inside one
+//! contract.
 //!
 //! ## Money model
 //! Every token the contract holds sits in exactly one bucket of [`Totals`]
@@ -1160,10 +1160,10 @@ impl Contract {
         self.storage_balances.get(&id).copied().unwrap_or(0)
     }
 
-    /// The v3 hire checks, in the v3 order (`TaskEscrow._validateHire`).
-    /// The operator guard and the unwritten-review guard have no NEAR
-    /// counterpart: reputation is written in the same call, and no other
-    /// contract can act for an agent here.
+    /// The hire checks, in a fixed order so each refusal is predictable.
+    /// There is no operator guard and no unwritten-review guard: reputation
+    /// is written in the same call, and no other contract can act for an
+    /// agent here.
     fn validate_hire(&self, client_id: AgentId, worker_id: AgentId, amount: u128) {
         require!(amount > 0, ZERO_AMOUNT);
         require!(amount >= self.params.min_job_amount.0, AMOUNT_BELOW_MINIMUM);

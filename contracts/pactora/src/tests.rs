@@ -1,6 +1,6 @@
-//! Unit tests on the mocked NEAR runtime. Each rule here mirrors a v3 EVM
-//! test; the property test at the end checks the v3 invariants after every
-//! step of random sequences.
+//! Unit tests on the mocked NEAR runtime, one or more per rule; the property
+//! test at the end checks the money invariants (I1…I12) after every step of
+//! random sequences.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -284,7 +284,7 @@ fn only_the_owner_changes_an_agent() {
     });
 }
 
-// ─────────────────────────── hire checks, v3 order ───────────────────────────
+// ──────────────────────────── hire checks, in order ───────────────────────────
 
 #[test]
 fn hire_checks_refuse_in_v3_order() {
@@ -1186,7 +1186,7 @@ mod invariants {
         }
     }
 
-    /// I1, I1b, I4, I6, I10, I11 and I12 from the v3 invariant suite.
+    /// Invariants I1, I1b, I4, I6, I10, I11 and I12.
     fn check(h: &H, jobs: &[JobId], worker: AgentId) {
         h.check_i1();
         let t = h.c.get_totals();

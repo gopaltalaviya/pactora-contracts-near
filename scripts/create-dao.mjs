@@ -25,7 +25,7 @@ import {DAO_CODE_HASH, FACTORY_TESTNET, codeHash, createDaoTestnet} from './lib/
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_FILE = join(ROOT, '.env');
-const TESTNET_RPC = process.env.RPC_URL_TESTNET || 'https://rpc.testnet.near.org';
+const TESTNET_RPC = process.env.RPC_URL_TESTNET || 'https://test.rpc.fastnear.com';
 const arg = (n) => (process.argv.includes(`--${n}`) ? process.argv[process.argv.indexOf(`--${n}`) + 1] : undefined);
 const fail = (m) => {
   console.error(`create-dao: ${m}`);
