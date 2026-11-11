@@ -7,7 +7,8 @@ they can't break.*
 ## Live on NEAR testnet
 
 Deployed 2026-11-10 from this branch; checked on chain by `verify-near --network testnet --dao` (25 checks passed,
-the DAO ruling included):
+the DAO ruling included; 28 on a local sandbox, where the `auto_approve` and
+`expire_dispute` checks can fast-forward time and testnet's real-time windows cannot):
 
 | Contract | Account | |
 |---|---|---|
@@ -26,7 +27,7 @@ https://api.64-177-60-103.sslip.io (`/v1/status` shows each part live).
 Every item below was built from 2026-11-05 on, in [this history](https://github.com/gopaltalaviya/pactora-contracts-near/commits/human-work):
 
 - **`contracts/pactora`, version 1.1.0**: agent registry, escrow state machine, worker and dispute
-  bonds, rolling 24 h spend caps, reputation written only by a settled job, NEP-297 events; 88 tests,
+  bonds, rolling 24 h spend caps, reputation written only by a settled job, NEP-297 events; 88 tests in the workspace,
   including model-based property tests and adversarial runs on a local NEAR node.
 - **A 2-of-3 Sputnik DAO as the arbiter** (`scripts/create-dao.mjs`), ruling disputes on chain.
 - **Function-call keys**: an agent's wallet signs only Pactora calls, so a leaked key cannot withdraw.
@@ -80,9 +81,10 @@ spend only within its caps and can never withdraw.**
 the marketplace holds the payment, acceptance releases it, a dispute
 deposit, a resolver, a 0–100 reputation — **off-chain and custodial**: an
 operator holds the funds and the records. Pactora is that settlement and
-reputation layer **on-chain and trustless**: escrow, bonds, caps and the
+reputation layer **on-chain and non-custodial**: escrow, bonds, caps and the
 ruling live in this contract, nobody takes custody, there is no operator
-who can move funds or edit a score, and the reputation (`worker_record`,
+method that moves a job's funds or edits a score (on testnet the owner key
+can still change the arbiter or upgrade the code: see Trust, stated plainly), and the reputation (`worker_record`,
 `client_record`, `verdict_of`) is state any app or agent can read and build
 on. The two complement each other rather than compete: a Pactora worker is
 an ordinary NEAR account and can be listed on Agent Market, settling its
@@ -96,7 +98,8 @@ Linux (or WSL) with the toolchain in `rust-toolchain.toml`:
 ```sh
 cargo test --workspace --lib -- --test-threads=1  # unit, property and fuzz tests (one thread: near-sdk's mocked runtime can crash in parallel)
 PROPTEST_CASES=2000 cargo test -p pactora --lib fuzz -- --test-threads=1   # a deeper fuzz run (default 256 cases)
-PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \n  cargo test -p pactora --test sandbox           # local NEAR node, the committed wasm (unset: built with cargo-near)
+PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \
+  cargo test -p pactora --test sandbox           # local NEAR node, the committed wasm (unset: built with cargo-near)
 PACTORA_WASM=$PWD/wasm/pactora.wasm MOCK_USDC_WASM=$PWD/wasm/mock_usdc.wasm \
 OLD_PACTORA_WASM=$PWD/wasm/previous/pactora.wasm SPUTNIK_DAO_WASM=$PWD/dao.wasm \
   cargo test -p pactora --test adversarial       # races, gas, a real DAO, upgrade + migrate (the two optional wasms enable those tests)
@@ -167,7 +170,8 @@ hash-checked Sputnik DAO wasm fetched from testnet; `deploy.mjs` +
 
 ## Run it live on a local NEAR node
 
-Do this, see that (Docker; `npm ci` first; clone with `-b human-work`, the
+Do this, see that (Docker; `npm ci` first; `pactora-backend-near` cloned
+beside this repo, for the sandbox image; clone with `-b human-work`, the
 submission branch). A POSIX shell (Linux, macOS, WSL); on Git Bash for
 Windows prefix the `docker run` with `MSYS_NO_PATHCONV=1` and use
 `$(pwd -W)` for `$PWD`, or the volume mounts the wrong folder. Port 3031
