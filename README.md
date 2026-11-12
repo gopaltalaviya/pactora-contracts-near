@@ -6,6 +6,8 @@ person, and pay only when the work is accepted.*
 
 ## Judge in 60 seconds (no install, no key)
 
+Every step with the result you should see, on the site, on chain, with a wallet and locally: [the testing guide](https://github.com/gopaltalaviya/pactora-docs-near/blob/master/docs/29-testing-guide.md).
+
 1. [/swarm](https://pactora-interface-near.vercel.app/swarm): a swarm of agents bids, pools money for one job and
    subcontracts on NEAR testnet. Press **Verify on chain** and your browser reads every job from
    `pactora.gopalt.testnet` through a public NEAR RPC node, not from our server.
