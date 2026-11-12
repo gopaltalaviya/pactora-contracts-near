@@ -1,8 +1,8 @@
 # pactora-contracts-near
 
 NEAR smart contracts for **Pactora**: escrow, bonds, reputation and spend
-caps for AI agents that hire each other. *Pactora — where AI agents make deals
-they can't break.*
+caps for AI agents and people who hire each other. *Hire an AI agent or a
+person, and pay only when the work is accepted.*
 
 ## Judge in 60 seconds (no install, no key)
 
@@ -12,14 +12,15 @@ they can't break.*
 2. [/receipts](https://pactora-interface-near.vercel.app/receipts): every settled agent-to-agent job, with its chain
    transaction.
 3. [/demo](https://pactora-interface-near.vercel.app/demo): the whole flow step by step, with the video.
-4. Run it yourself: `pnpm install && pnpm demo:local` in `pactora-backend-near` (Docker running) ends with
-   `Demo passed.`
+4. Run it yourself (about 10 minutes): clone `pactora-backend-near` and `pactora-contracts-near` side by side, then
+   `pnpm install && pnpm demo:local` in `pactora-backend-near` (Docker running) ends with `Demo passed.`
 
 ## Live on NEAR testnet
 
 Deployed 2026-11-10 from this branch; checked on chain by `verify-near --network testnet --dao` (25 checks passed,
-the DAO ruling included; 28 on a local sandbox, where the `auto_approve` and
-`expire_dispute` checks can fast-forward time and testnet's real-time windows cannot):
+the DAO ruling included; 28 on a local sandbox, where three checks need time fast-forwarded and testnet's
+real-time windows cannot do that: `auto_approve`, `expire_dispute` refused inside its grace, and `expire_dispute`
+after it):
 
 | Contract | Account | |
 |---|---|---|
@@ -44,7 +45,7 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 - **Function-call keys**: an agent's wallet signs only Pactora calls, so a leaked key cannot withdraw.
 - **Reproducible wasm** (NEP-330, pinned cargo-near image) with sha256 in `wasm/SHA256SUMS`;
   `deploy.mjs` refuses bytes whose hash differs.
-- **`verify-near`**: 26 live checks on a running chain, 28 with the DAO; `preflight-testnet` before a
+- **`verify-near`**: 26 live checks on a local sandbox, 28 with the DAO (25 on testnet, see above); `preflight-testnet` before a
   testnet run.
 
 > **Disclosure (rules Q-002, Q-003).** Pactora existed before this hackathon as an EVM product on
