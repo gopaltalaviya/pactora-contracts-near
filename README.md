@@ -125,6 +125,7 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 |---|---|
 | `contracts/pactora` | The protocol, one contract: agent registry, escrow state machine, worker and dispute bonds, rolling 24 h spend caps, reputation, roles, NEP-297 events |
 | `contracts/mock-usdc` | Testnet-only NEP-141 token with 6 decimals; only its owner mints |
+| `contracts/credentials` | Pactora Work Credentials: soulbound NEP-171 tokens, one per settled job; only its minter mints (see [Work credentials](#work-credentials)) |
 | `contracts/pactora/src/tests.rs` | Unit tests and a property test of the protocol invariants; `mod audit` holds the tests written for the 2026-11-09 audit fixes |
 | `contracts/pactora/src/fuzz.rs` | Model-based property tests: random call sequences from every kind of caller, an oracle that predicts each call's refusal and the whole post-state, invariants after every step, and a drain at the end (`PROPTEST_CASES` sets the depth) |
 | `contracts/pactora/tests/sandbox.rs` | Integration tests on a local NEAR node against the compiled wasm |
@@ -326,6 +327,54 @@ request, so fund the deployer before starting:
 | `verify-near`, each run | ~7 while it runs, ~1 spent | Three fresh owners at 2 each, deleted back into the deployer at the end. Their agent wallets at 0.2 each stay where they are: a function-call key cannot move NEAR, by design, though their keys are saved. Registration and token-storage deposits go to your contract accounts |
 
 Mainnet is refused by every script.
+
+## Work credentials
+
+`contracts/credentials` is a separate contract, not part of Pactora: a
+NEP-171 token with NEP-177 metadata and NEP-181 enumeration (spec
+`nft-2.0.0`, name "Pactora Work Credentials", symbol `PWORK`), built on
+`near-contract-standards`. Pactora's code and wasm are unchanged by it.
+
+- `new(owner, minter)` is `#[private]`: only the contract account
+  initialises it, in the same batch as the deploy.
+- `nft_mint(token_id, receiver_id, metadata)` is minter-only and payable:
+  the deposit must cover the token's storage, the rest is refunded to the
+  minter. A `token_id` that exists already is refused. It emits the
+  standard NEP-171 `nft_mint` event. The token id is the Pactora chain job
+  id; the backend builds the metadata from the settled job.
+- `nft_transfer` and `nft_transfer_call` always panic ("Soulbound: work
+  credentials cannot be transferred"). There is no approval extension and
+  no burn.
+- Views: `nft_token`, `nft_tokens`, `nft_tokens_for_owner`,
+  `nft_supply_for_owner`, `nft_total_supply`, `nft_metadata`, `owner`,
+  `minter`. The owner can hand the mint role on with `set_minter`, which needs
+  exactly 1 yoctoNEAR, so only a full-access key can call it.
+- Trust: on testnet the deployer keeps a full-access key on the contract
+  account, so it could redeploy the code; "soulbound" holds as long as that
+  key does. Before mainnet the key is removed, as planned for Pactora itself.
+
+Test (unit tests, `VMContextBuilder`) and build (the same pinned image as
+the other two contracts; the result is `wasm/credentials.wasm`, its sha256
+in `wasm/SHA256SUMS`):
+
+```sh
+cargo test -p credentials --lib -- --test-threads=1
+docker run --rm -u "$(id -u):$(id -g)" -e CARGO_HOME=/tmp/cargo -v "$PWD:/host" -w /host/contracts/credentials   sourcescan/cargo-near:0.22.0-rust-1.99.1@sha256:c9655eaf7436b90c87ea8b25739f91063032c5c30ba24cfeafe72c142943b5bb   cargo near build non-reproducible-wasm --locked --no-wasmopt
+```
+
+Deploy (testnet or sandbox; mainnet is refused). The script creates
+`credentials.<deployer>`, funds it for its code storage, deploys
+`wasm/credentials.wasm` (refused if its hash differs from `SHA256SUMS`),
+calls `new({owner: <deployer>, minter})` and reads both roles back. An
+existing account is refused unless `--resume`. On testnet it then sets
+`contracts.Credentials` and `wasm.credentials` in
+`deployments/testnet.json` and changes nothing else in that file
+(`npm run test:credentials` tests the merge); `deployments/sandbox.json` is
+fixed and is not written.
+
+```sh
+node --env-file=.env scripts/deploy-credentials.mjs --network testnet --minter <minter-account>.testnet
+```
 
 ## Upgrading a deployed contract
 

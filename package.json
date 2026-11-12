@@ -10,6 +10,7 @@
   "scripts": {
     "deploy": "node scripts/deploy.mjs",
     "preflight": "node --env-file=.env scripts/preflight-testnet.mjs",
-    "test:preflight": "node --test scripts/preflight.test.mjs"
+    "test:preflight": "node --test scripts/preflight.test.mjs",
+    "test:credentials": "node --test scripts/credentials.test.mjs"
   }
 }
