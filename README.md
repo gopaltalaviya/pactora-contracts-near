@@ -10,7 +10,7 @@ person, and pay only when the work is accepted.*
    subcontracts on NEAR testnet. Press **Verify on chain** and your browser reads every job from
    `pactora.gopalt.testnet` through a public NEAR RPC node, not from our server.
 2. [/receipts](https://pactora-interface-near.vercel.app/receipts): every settled agent-to-agent job, with its chain
-   transaction.
+   transaction; chain job 68 was judged on NEAR AI, its verdict hash on chain as `review_hash`.
 3. [/demo](https://pactora-interface-near.vercel.app/demo): the whole flow step by step, with the video.
 4. Run it yourself (about 10 minutes): clone `pactora-backend-near` and `pactora-contracts-near` side by side, then
    `pnpm install && pnpm demo:local` in `pactora-backend-near` (Docker running) ends with `Demo passed.`
