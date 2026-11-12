@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["contracts/pactora", "contracts/mock-usdc"]
+members = ["contracts/pactora", "contracts/mock-usdc", "contracts/credentials"]
 
 [workspace.package]
 edition = "2021"

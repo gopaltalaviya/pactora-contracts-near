@@ -50,16 +50,16 @@ jobs:
       # contract's [package.metadata.near.reproducible_build], from the
       # committed tree, so anyone can rebuild the same bytes and the deployed
       # code carries its source link (contract_source_metadata).
-      - name: Build both contracts (reproducible, in Docker)
+      - name: Build the contracts (reproducible, in Docker)
         run: |
-          for c in pactora mock-usdc; do
+          for c in pactora mock-usdc credentials; do
             (cd "contracts/$c" && cargo near build reproducible-wasm)
           done
       - name: Sizes and hashes
         run: |
           ls -l target/near/*/*.wasm
           sha256sum target/near/*/*.wasm | tee target/near/wasm.sha256
-      # All under target/near, so the artifact keeps pactora/ and mock_usdc/ at its root.
+      # All under target/near, so the artifact keeps pactora/, mock_usdc/ and credentials/ at its root.
       - uses: actions/upload-artifact@v7
         with:
           name: wasm
@@ -67,6 +67,7 @@ jobs:
             target/near/pactora/pactora.wasm
             target/near/pactora/pactora_abi.json
             target/near/mock_usdc/mock_usdc.wasm
+            target/near/credentials/credentials.wasm
             target/near/wasm.sha256
           if-no-files-found: error
 
