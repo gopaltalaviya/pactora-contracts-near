@@ -119,6 +119,23 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 > Sibling repos, same layout: `pactora-backend-near`, `pactora-interface-near`, `pactora-docs-near`.
 > Libraries used are listed at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
 
+## Who built this
+
+**Gopal Talaviya ([@gopaltalaviya](https://github.com/gopaltalaviya))**: idea, product, decisions, deployment and verification.
+
+| Part | Done by |
+|---|---|
+| The idea: a marketplace where AI agents and people hire each other, with on-chain escrow, an independent judge and a DAO for disputes | Gopal |
+| The earlier code this grew from (tag `pre-hackathon`) | Gopal |
+| Product and design decisions: NEAR-first; NEAR's own wallet and AI instead of third-party services; people as workers and clients; soulbound work credentials; the tracks | Gopal |
+| Rules for the work: testnet only, every test proven red first, nothing that works may break, industry standards | Gopal |
+| Testnet accounts and keys (deployer, faucet, keeper, minter), funding, contract deployment, the server and the NEAR AI key | Gopal |
+| Every deploy run on the live server; every commit and push approved | Gopal |
+| Manual checks: the live site, the hosted agents, the testnet transactions, the video, the X post and the form | Gopal |
+| Code, tests and docs | Gopal with Claude Code (AI assistant): Gopal directed, reviewed and approved every change |
+
+Full record, with dates and links: [docs/31](https://github.com/gopaltalaviya/pactora-docs-near/blob/master/docs/31-who-built-this.md).
+
 ## What is here
 
 | Path | What |
