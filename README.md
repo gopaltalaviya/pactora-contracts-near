@@ -16,7 +16,7 @@ Every step with the result you should see, on the site, on chain, with a wallet 
 3. [/demo](https://pactora-interface-near.vercel.app/demo): the whole flow step by step, with the video.
 4. Run it yourself (about 10 minutes): clone `pactora-backend-near` and `pactora-contracts-near` side by side, then
    `pnpm install && pnpm demo:local` in `pactora-backend-near` (Docker running) ends with `Demo passed.`
-5. Work credentials (NFTs): every settled escrow job's worker can claim a soulbound NEP-171 credential on `credentials.gopalt.testnet`; tokens 68 and 70 are live, each field matching its Pactora job on chain, and transfers are refused.
+5. Work credentials (NFTs): every settled escrow job's worker can claim a soulbound NEP-171 credential on `credentials.gopalt.testnet`; tokens 68 and 70 are live, and transfers are refused. The API builds each token's metadata from the settled job it reads on chain (`get_job`), so every field matches that job; the credentials contract itself trusts its one minter rather than re-checking Pactora.
 
 <p>
   <img src="https://pactora-interface-near.vercel.app/media/verify-on-chain.gif" alt="On /swarm, pressing Verify on chain: the browser reads all 11 swarm jobs from the NEAR contract and shows 11 of 11 settled with the same result hash" width="49%">
@@ -102,7 +102,7 @@ https://api.64-177-60-103.sslip.io (`/v1/status` shows each part live).
 Every item below was built from 2026-11-05 on, in [this history](https://github.com/gopaltalaviya/pactora-contracts-near/commits/human-work):
 
 - **`contracts/pactora`, version 1.1.0**: agent registry, escrow state machine, worker and dispute
-  bonds, rolling 24 h spend caps, reputation written only by a settled job, NEP-297 events; 88 tests in the workspace,
+  bonds, rolling 24 h spend caps, reputation written only by a settled job, NEP-297 events; 96 tests in the workspace (88 for pactora and mock-usdc, 8 for credentials),
   including model-based property tests and adversarial runs on a local NEAR node.
 - **A 2-of-3 Sputnik DAO as the arbiter** (`scripts/create-dao.mjs`), ruling disputes on chain.
 - **Function-call keys**: an agent's wallet signs only Pactora calls, so a leaked key cannot withdraw.
@@ -114,8 +114,7 @@ Every item below was built from 2026-11-05 on, in [this history](https://github.
 > **Disclosure (rules Q-002, Q-003).** Earlier, non-NEAR code existed before this hackathon
 > (Solidity contracts for an EVM chain). That code is this repository's first commit,
 > tagged `pre-hackathon` (2026-11-04): the baseline, not the submission. Only the NEAR work after it is submitted, dated in the
-> history: [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission)
-> (the tag is added at submission; until then [`pre-hackathon...human-work`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...human-work)).
+> history: [`pre-hackathon...hackathon-submission`](https://github.com/gopaltalaviya/pactora-contracts-near/compare/pre-hackathon...hackathon-submission).
 >
 > Sibling repos, same layout: `pactora-backend-near`, `pactora-interface-near`, `pactora-docs-near`.
 > Libraries used are listed at the end of this file (Q-005); licence is MIT, `LICENSE` (Q-014).
